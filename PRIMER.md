@@ -2,7 +2,7 @@
 
 Context for anyone (usually Claude) working on ShowPilot Player. Read this before changing code. It supersedes the earlier concept primer that lived outside the repo.
 
-**Status: v0.3.3.** Running on a Raspberry Pi 4B with real controllers and a USB sound card (0.1.6 timing measured there, see Testing). 0.2.0 adds FPP-style commands and command presets, a reworked scheduler (sequences, repeat-every, holidays) and FPP backup restore; those are covered by automated tests and a browser check, not yet used on a Pi. HDMI video/matrix and a full show night are still to check (Phase 1 list).
+**Status: v0.3.4.** Running on a Raspberry Pi 4B with real controllers and a USB sound card (0.1.6 timing measured there, see Testing). 0.2.0 adds FPP-style commands and command presets, a reworked scheduler (sequences, repeat-every, holidays) and FPP backup restore; those are covered by automated tests and a browser check, not yet used on a Pi. HDMI video/matrix and a full show night are still to check (Phase 1 list).
 
 ---
 
@@ -161,6 +161,9 @@ test/                     node:test suites
 ### DDP (port 4048)
 10-byte header: `0x40` (`0x41` = PUSH on each controller's last packet), sequence 1..15 per packet sent, data type 0, destination 1, offset u32 BE, length u16 BE; ≤1440 data bytes. No separate sync packet. "One-based" mode puts offsets relative to the output.
 
+### Sending (`OutputSet`)
+- Every packet is queued **as its own copy** (the per-output packet buffers are reused each frame; a send still queued in the socket must not carry the next frame's data), then sent in **bursts of 24 packets with ~1 ms between bursts**. A 240x240 DDP matrix is ~120 packets per frame; sent back to back, the receiving FPP (bridge) dropped about 1 in 12 (its "Errors" column counts DDP sequence gaps), and each lost packet left a 480-pixel band showing the previous frame ("lines slow to turn off"). If a frame is still going out when the next is due, it is finished first (in order). Send buffer asks for 4 MB (the kernel may cap it). Stats: `packets`, `bursts`, `flushedEarly`, `sendErrors`.
+
 ### E1.31 (port 5568)
 126-byte header + data (not padded to 512). CID is FPP's constant `FALCON FPP`; priority default 0 (FPP's effective default); per-universe sequence pre-incremented; multicast `239.255.(u>>8).(u&255)`. Optional 49-byte sync packet after all data packets, once per sync universe.
 
@@ -308,6 +311,7 @@ Also verified by hand in the dev environment (v0.1.0):
 
 | Version | Change | Checked |
 |---|---|---|
+| 0.3.4 | Big DDP outputs (a matrix FPP) showed trailing lines: ~8.7% of packets lost at the receiver from 120-packet bursts. Packets are now sent from their own copies and paced in bursts of 24. | New test (paced, ordered, own copies, PUSH last, early flush); 39 tests pass. On the Pi: check the matrix FPP's DDP Errors column after Reset. |
 | 0.3.3 | Diagnosis for "an output gets no data" (seen with a DDP matrix FPP): sequences uploaded sparse before that output existed don't contain its channels. The player now says which outputs a sequence has no data for (log, Dashboard while playing, Files page). DDP offsets re-checked against FPP's DDP.cpp (type 4 raw = start-1, type 5 one-based = 0): unchanged and correct. | 38 tests pass (new: coverage check). |
 | 0.3.2 | Playlists: "Randomize order" button shuffles the Main items once and saves (the Shuffle switch is now labelled "Shuffle each loop"). | Checked in a browser: order changed and was saved; 37 tests pass. |
 | 0.3.1 | Starting a playlist could show "Playing" with nothing playing: a repeating playlist with no playable item (missing files, all disabled, or only commands) spun through its items and then sat idle. It now stops and the reason is shown; command-only playlists run once. The Play buttons report what really happened. Mobile menu closes when tapping outside it (backdrop), on Escape, or when a page is picked. | 37 tests pass (new: nothing-playable stop with reason, trigger playlist runs once); mobile menu checked with touch in a browser. |
