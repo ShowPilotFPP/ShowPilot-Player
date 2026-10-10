@@ -86,6 +86,10 @@ module.exports = function playerRoutes(ctx) {
       showpilot: showpilot.status(),
       multisync: { sending: multisync.isSending(), lastMaster: multisync.stats.lastMaster, systems: multisync.systems.size },
       ips: ifaces().map((i) => i.address),
+      problems: [
+        ...require('../lib/health').missing().map((d) => `${d.bin} is not installed (${d.why}). Run System → System software to install it.`),
+        ...(player.problems || []),
+      ],
     };
   }));
   r.get('/logs', wrap((req) => ({ lines: log.tail(Math.min(1000, parseInt(req.query.n, 10) || 300)) })));

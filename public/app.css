@@ -113,6 +113,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 .logs { background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 10px; max-height: 420px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
 
+.problem { margin: 12px 24px 0; padding: 10px 14px; border-radius: 8px; background: var(--accent-soft); color: var(--text); border: 1px solid var(--accent); }
 .toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
 .toast { background: var(--bg-elevated); border: 1px solid var(--border); border-left: 3px solid var(--ok); border-radius: 8px; padding: 10px 14px; box-shadow: var(--shadow); max-width: 380px; }
 .toast.err { border-left-color: var(--accent); }

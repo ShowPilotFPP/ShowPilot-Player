@@ -92,6 +92,9 @@
         STATUS.mode === 'remote' ? '<span class="pill warn">Remote mode</span>' : '',
         sp.enabled ? `<span class="pill ${sp.connected ? 'ok' : 'bad'}">ShowPilot ${sp.connected ? 'connected' : 'offline'}</span>` : '',
       ].join(' ');
+      let banner = $('#problems');
+      if (!banner) { banner = document.createElement('div'); banner.id = 'problems'; $('.main').insertBefore(banner, $('#page')); }
+      banner.innerHTML = (STATUS.problems || []).map((p) => `<div class="problem">${esc(p)}</div>`).join('');
       $('#sideFoot').innerHTML = `v${esc(STATUS.version)} · ${esc(STATUS.hostName)}<br>${STATUS.ips.map(esc).join(', ')}`;
       if (current === 'dashboard') renderNow();
     } catch {}
