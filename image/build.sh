@@ -13,6 +13,7 @@ mkdir -p "$WORK" && rm -rf "$WORK/pi-gen"
 git clone --depth 1 --branch arm64 https://github.com/RPi-Distro/pi-gen.git "$WORK/pi-gen"
 cp -r "$HERE/stage-showpilot" "$WORK/pi-gen/"
 # The app goes in as tracked files only (no .git, node_modules or local data).
+mkdir -p "$WORK/pi-gen/stage-showpilot/01-app/files"   # empty dirs are not in git
 git -C "$REPO" archive --format=tar.gz -o "$WORK/pi-gen/stage-showpilot/01-app/files/app.tar.gz" HEAD
 cp "$HERE/config" "$WORK/pi-gen/config"
 # Only export our stage, not the plain "lite" image from stage2.

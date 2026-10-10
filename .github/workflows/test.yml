@@ -16,4 +16,10 @@ jobs:
       - name: Player dependencies (mpv, php-cgi, ffmpeg)
         run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends mpv php-cgi ffmpeg
       - run: npm ci
+      # Twice, in two timezones: schedule and dusk/sunset maths must not depend on the system zone.
       - run: npm test
+        env:
+          TZ: UTC
+      - run: npm test
+        env:
+          TZ: Pacific/Auckland

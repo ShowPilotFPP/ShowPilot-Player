@@ -2,7 +2,7 @@
 
 Context for anyone (usually Claude) working on ShowPilot Player. Read this before changing code. It supersedes the earlier concept primer that lived outside the repo.
 
-**Status: v0.1.0, first build.** Everything below is implemented and covered by tests in a Linux dev environment with mpv on a null audio device. It has **not yet run on a Raspberry Pi**, driven real controllers, played to HDMI, or been built into an SD image (the image workflow runs on GitHub). The Phase 1 measurements below are the next step.
+**Status: v0.1.1, first build.** Everything below is implemented and covered by tests in a Linux dev environment with mpv on a null audio device. It has **not yet run on a Raspberry Pi**, driven real controllers, played to HDMI, or been built into an SD image (the image workflow runs on GitHub). The Phase 1 measurements below are the next step.
 
 ---
 
@@ -237,6 +237,7 @@ Also verified by hand in the dev environment (v0.1.0):
 | Version | Change | Checked |
 |---|---|---|
 | 0.1.0 | First build (independent code review before release fixed plugin-name traversal, CGI crash, concurrent player transitions, pip option names, command-arg decoding and scheduler pruning): audio-clocked fseq playback with PLL-disciplined clock and exact resume; DDP/E1.31; playlists, inserts, scheduler with dusk/sunset; MultiSync master/remote + discovery; video and virtual matrix via a display mpv; xLights FPP Connect API; FPP script/PHP plugin host with `/opt/fpp` shim; built-in ShowPilot client and audio daemon; admin UI with optional password, timezone, updater; pi-gen image pipeline, install script, ShipPilot/test/image workflows. | 21 automated tests; manual runs against mpv (null audio), crafted MultiSync packets, and a local ShowPilot server. Not yet run on a Pi. |
+| 0.1.1 | Fixes from the first GitHub runs. Dusk/sunset times were wrong when the system timezone differed from the show location's (e.g. a Pi left on UTC): events are now placed within 12 h of the location's solar noon, independent of the system zone. SD image build failed because the empty `stage-showpilot/01-app/files/` folder isn't stored in git; `image/build.sh` now creates it. CI runs the tests in two timezones. | Tests pass under UTC, America/Chicago and Pacific/Auckland; image script runs through to the Docker build. |
 
 ---
 
