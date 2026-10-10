@@ -181,123 +181,311 @@
   }
 
   // ---------------------------------------------------------------- playlists
-  const ENTRY_TYPES = ['both', 'sequence', 'media', 'pause', 'command', 'script'];
-  let editing = null;
+  // FPP playlist format: leadIn / mainPlaylist / leadOut lists of entries.
+  const SECTIONS = [['leadIn', 'Lead-in', 'Plays once at the start'], ['mainPlaylist', 'Main', 'The show; repeats if Repeat is on'], ['leadOut', 'Lead-out', 'Plays once when the show stops gracefully']];
+  const ITEM_TYPES = [
+    ['both', 'Sequence + audio', 'fa-music'], ['sequence', 'Sequence only', 'fa-lightbulb'], ['media', 'Audio / video', 'fa-film'],
+    ['pause', 'Pause', 'fa-pause'], ['command', 'Command', 'fa-terminal'], ['script', 'Script', 'fa-scroll'], ['playlist', 'Playlist', 'fa-list'],
+  ];
+  const TYPE_OF = Object.fromEntries(ITEM_TYPES.map((t) => [t[0], t]));
+  const noExt = (n) => String(n || '').replace(/\.(fseq|mp3|m4a|ogg|wav|flac|mp4|mkv|mov|avi)$/i, '');
+  const dur = (sec) => { sec = Math.round(sec || 0); const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60; return h ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`; };
 
   PAGES.playlists = async (el) => {
-    await loadLib();
-    const sel = location.hash.split('/')[1] ? decodeURIComponent(location.hash.split('/')[1]) : null;
-    el.innerHTML = `
-      <div class="grid g2" style="grid-template-columns:minmax(220px,280px) 1fr">
-        <div class="card">
-          <h3>Playlists</h3>
-          <div class="stack" id="plList"></div>
-          <div class="row" style="margin-top:12px"><input id="plNew" placeholder="New playlist name"><button class="btn" id="plCreate">Create</button></div>
+    await Promise.all([loadLib(), loadCmds()]);
+    const selName = location.hash.split('/')[1] ? decodeURIComponent(location.hash.split('/')[1]) : null;
+    let pl = null;          // playlist being edited
+    let openItem = null;    // "section:index" with its editor open
+    let saveTimer = null;
+    let saveState = '';     // '', 'saving', 'saved', 'error'
+    let filter = '';
+    let summaries = {};
+
+    const seqInfo = (n) => LIB.sequences.find((s) => s.name === n);
+    const mediaFor = (seq) => { const s = seqInfo(seq); return s && s.mediaFilename && [...LIB.music, ...LIB.videos].some((m) => m.name === s.mediaFilename) ? s.mediaFilename : ''; };
+    const itemSecs = (e) => {
+      if (e.type === 'pause') return Number(e.duration) || 0;
+      const s = seqInfo(e.sequenceName);
+      if (s && s.durationMs) return s.durationMs / 1000;
+      return Number(e.duration) || 0;
+    };
+    const itemTitle = (e) => {
+      if (e.type === 'both' || e.type === 'sequence') return noExt(e.sequenceName) || 'No sequence chosen';
+      if (e.type === 'media') return noExt(e.mediaName) || 'No file chosen';
+      if (e.type === 'pause') return `Pause ${Number(e.duration) || 0} s`;
+      if (e.type === 'command') return cmdSummary(e);
+      if (e.type === 'script') return e.scriptName ? `${e.scriptName}${e.scriptArgs ? ' ' + e.scriptArgs : ''}` : 'No script chosen';
+      if (e.type === 'playlist') return e.name ? `Playlist: ${e.name}` : 'No playlist chosen';
+      return `${e.type} (kept, not played here)`;
+    };
+    const itemSub = (e) => {
+      if (e.type === 'both') return e.mediaName ? `with ${e.mediaName}` : 'no audio chosen';
+      if (e.type === 'sequence') return 'lights only';
+      return '';
+    };
+    const totals = (p) => {
+      const items = SECTIONS.reduce((a, [k]) => a + (p[k] || []).length, 0);
+      const secs = SECTIONS.reduce((a, [k]) => a + (p[k] || []).filter((e) => e.enabled !== 0 && e.enabled !== false).reduce((b, e) => b + itemSecs(e), 0), 0);
+      return { items, secs };
+    };
+
+    const loadSummaries = async () => {
+      const names = LIB.playlists;
+      const got = await Promise.all(names.map((n) => api('GET', `/api/playlist/${encodeURIComponent(n)}`).catch(() => null)));
+      summaries = {};
+      names.forEach((n, i) => { if (got[i]) summaries[n] = totals(got[i]); });
+    };
+
+    const save = () => {
+      clearTimeout(saveTimer);
+      saveState = 'saving'; showSaveState();
+      saveTimer = setTimeout(async () => {
+        try {
+          const saved = await api('POST', `/api/playlist/${encodeURIComponent(pl.name)}`, pl);
+          pl.playlistInfo = saved.playlistInfo;
+          summaries[pl.name] = totals(pl);
+          saveState = 'saved';
+        } catch (e) { saveState = 'error'; toast('Could not save: ' + e.message, true); }
+        showSaveState(); renderList();
+      }, 500);
+    };
+    const showSaveState = () => {
+      const s = $('#plSaveState');
+      if (!s) return;
+      s.className = 'save-state ' + saveState;
+      s.textContent = saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'All changes saved' : saveState === 'error' ? 'Not saved' : '';
+    };
+
+    const renderList = () => {
+      const box = $('#plList');
+      if (!box) return;
+      const playing = STATUS && STATUS.playlist && STATUS.playlist.name;
+      const names = LIB.playlists.filter((n) => !filter || n.toLowerCase().includes(filter.toLowerCase()));
+      box.innerHTML = names.map((n) => {
+        const s = summaries[n];
+        return `<a class="pl-item ${pl && pl.name === n ? 'on' : ''}" href="#playlists/${encodeURIComponent(n)}">
+          <span class="pl-name">${esc(n)}</span>
+          <span class="pl-meta">${s ? `${s.items} item${s.items === 1 ? '' : 's'} · ${dur(s.secs)}` : ''}${playing === n ? ' <span class="pill ok">Playing</span>' : ''}</span></a>`;
+      }).join('') || `<p class="dim" style="padding:8px 4px">${LIB.playlists.length ? 'No match.' : 'No playlists yet.'}</p>`;
+    };
+
+    const itemEditor = (e, sec, i) => {
+      const seqOpts = (v) => `<option value="">Choose a sequence…</option>${LIB.sequences.map((s) => `<option value="${esc(s.name)}" ${s.name === v ? 'selected' : ''}>${esc(noExt(s.name))}</option>`).join('')}${v && !seqInfo(v) ? `<option selected>${esc(v)}</option>` : ''}`;
+      const media = [...LIB.music.map((m) => m.name), ...LIB.videos.map((m) => m.name)];
+      const mediaOpts = (v) => `<option value="">${e.type === 'both' ? 'No audio' : 'Choose a file…'}</option>${media.map((m) => `<option ${m === v ? 'selected' : ''}>${esc(m)}</option>`).join('')}${v && !media.includes(v) ? `<option selected>${esc(v)}</option>` : ''}`;
+      let fields = '';
+      if (e.type === 'both' || e.type === 'sequence') fields += `<label>Sequence <select data-f="sequenceName">${seqOpts(e.sequenceName)}</select></label>`;
+      if (e.type === 'both' || e.type === 'media') fields += `<label>${e.type === 'both' ? 'Audio' : 'Audio or video file'} <select data-f="mediaName">${mediaOpts(e.mediaName)}</select></label>`;
+      if (e.type === 'pause') fields += `<label>Seconds <input type="number" min="0" step="0.5" data-f="duration" value="${esc(e.duration ?? 5)}"></label>`;
+      if (e.type === 'script') fields += `<label>Script <select data-f="scriptName"><option value="">Choose a script…</option>${LIB.scripts.map((s) => `<option ${s === e.scriptName ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select></label>
+        <label>Arguments <input data-f="scriptArgs" value="${esc(e.scriptArgs || '')}"></label>`;
+      if (e.type === 'playlist') fields += `<label>Playlist <select data-f="name"><option value="">Choose…</option>${LIB.playlists.filter((n) => n !== pl.name).map((n) => `<option ${n === e.name ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>`;
+      return `<div class="item-edit" data-sec="${sec}" data-i="${i}">
+        <div class="seg seg-wrap">${ITEM_TYPES.map(([t, l, ic]) => `<button type="button" data-type="${t}" class="${e.type === t ? 'on' : ''}"><i class="fas ${ic}"></i> ${l}</button>`).join('')}</div>
+        ${e.type === 'command' ? '<div class="cmd-form" id="plCmdForm"></div>' : `<div class="fields">${fields}</div>`}
+        <div class="row end"><button class="btn small" data-close>Done</button></div></div>`;
+    };
+
+    const itemRow = (e, sec, i) => {
+      const on = e.enabled !== 0 && e.enabled !== false;
+      const t = TYPE_OF[e.type] || [e.type, e.type, 'fa-question'];
+      const key = `${sec}:${i}`;
+      const missing = ((e.type === 'both' || e.type === 'sequence') && e.sequenceName && !seqInfo(e.sequenceName)) ||
+        ((e.type === 'media' || (e.type === 'both' && e.mediaName)) && e.mediaName && ![...LIB.music, ...LIB.videos].some((m) => m.name === e.mediaName));
+      return `<div class="pl-row ${on ? '' : 'off'} ${openItem === key ? 'open' : ''}" data-sec="${sec}" data-i="${i}" draggable="true">
+        <span class="drag" title="Drag to move"><i class="fas fa-grip-vertical"></i></span>
+        <span class="num">${i + 1}</span>
+        <span class="ticon t-${esc(e.type)}" title="${esc(t[1])}"><i class="fas ${t[2]}"></i></span>
+        <span class="pl-main" data-open><span class="pl-title">${esc(itemTitle(e))}</span>
+          <span class="pl-sub">${esc(itemSub(e))}${missing ? ' <span class="pill warn">File missing</span>' : ''}</span></span>
+        <span class="pl-dur">${itemSecs(e) ? dur(itemSecs(e)) : ''}</span>
+        <label class="switch small" title="${on ? 'Plays' : 'Skipped'}"><input type="checkbox" data-on ${on ? 'checked' : ''}><span></span></label>
+        <span class="pl-acts">
+          <button class="icon-btn2" data-mv="-1" title="Move up" ${i ? '' : 'disabled'}><i class="fas fa-arrow-up"></i></button>
+          <button class="icon-btn2" data-mv="1" title="Move down" ${i < pl[sec].length - 1 ? '' : 'disabled'}><i class="fas fa-arrow-down"></i></button>
+          <button class="icon-btn2" data-open title="Edit"><i class="fas fa-pen"></i></button>
+          <button class="icon-btn2" data-dup title="Duplicate"><i class="fas fa-clone"></i></button>
+          <button class="icon-btn2 danger" data-del title="Remove"><i class="fas fa-trash"></i></button></span>
+      </div>${openItem === key ? itemEditor(e, sec, i) : ''}`;
+    };
+
+    const renderEditor = () => {
+      const box = $('#plEditor');
+      if (!pl) {
+        box.innerHTML = `<div class="empty big"><i class="fas fa-list-ol"></i><p>${LIB.playlists.length ? 'Pick a playlist to edit, or create a new one.' : 'Create your first playlist.'}</p>
+          <p class="dim">A playlist plays its lead-in once, then the main items (repeating if you like), then the lead-out when the show stops.</p></div>`;
+        return;
+      }
+      const t = totals(pl);
+      box.innerHTML = `
+        <div class="pl-head">
+          <div><h2>${esc(pl.name)}</h2><div class="muted">${t.items} item${t.items === 1 ? '' : 's'} · ${dur(t.secs)}${pl.mainPlaylist.length && pl.repeat ? ' per loop' : ''} <span id="plSaveState" class="save-state"></span></div></div>
+          <span class="spacer"></span>
+          <button class="btn primary" id="plPlay"><i class="fas fa-play"></i> Play</button>
+          <div class="menu-wrap"><button class="btn" id="plMore" aria-label="More"><i class="fas fa-ellipsis"></i></button>
+            <div class="menu" id="plMenu" hidden><button data-m="dup"><i class="fas fa-clone"></i> Duplicate playlist</button><button data-m="del" class="danger"><i class="fas fa-trash"></i> Delete playlist</button></div></div>
         </div>
-        <div class="card" id="plEditor"><p class="muted">Pick a playlist to edit.</p></div>
+        <div class="pl-opts">
+          <label class="inline"><span class="switch"><input type="checkbox" id="plRepeat" ${pl.repeat ? 'checked' : ''}><span></span></span> Repeat main</label>
+          <label class="inline"><span class="switch"><input type="checkbox" id="plRandom" ${pl.random ? 'checked' : ''}><span></span></span> Shuffle</label>
+          <label class="inline" ${pl.repeat ? 'hidden' : ''}>Play main <input type="number" id="plLoops" min="1" max="999" value="${Math.max(1, pl.loopCount || 1)}" style="width:70px"> time(s)</label>
+        </div>
+        ${SECTIONS.map(([k, title, hint]) => `
+          <div class="pl-sec" data-section="${k}">
+            <div class="pl-sec-head"><b>${title}</b> <span class="dim">${hint}</span><span class="spacer"></span>
+              ${k === 'mainPlaylist' && LIB.sequences.length ? '<button class="btn small" id="plFill"><i class="fas fa-wand-magic-sparkles"></i> Add all sequences</button>' : ''}
+              <button class="btn small" data-add="${k}"><i class="fas fa-plus"></i> Add</button></div>
+            <div class="pl-rows" data-drop="${k}">${pl[k].map((e, i) => itemRow(e, k, i)).join('') || `<div class="pl-empty" data-drop-empty="${k}">${k === 'mainPlaylist' ? 'Add sequences here.' : 'Empty'}</div>`}</div>
+          </div>`).join('')}`;
+      showSaveState();
+      wire();
+    };
+
+    // "Add" picker: sequences with search, and the other item kinds.
+    const openAdd = (sec, btn) => {
+      $$('.add-pop').forEach((x) => x.remove());
+      const pop = document.createElement('div');
+      pop.className = 'add-pop card';
+      pop.innerHTML = `<input placeholder="Search sequences…" id="addQ">
+        <div class="add-list" id="addList"></div>
+        <div class="add-other">${ITEM_TYPES.filter(([t]) => !['both', 'sequence'].includes(t)).map(([t, l, ic]) => `<button class="btn small" data-kind="${t}"><i class="fas ${ic}"></i> ${l}</button>`).join('')}</div>`;
+      btn.closest('.pl-sec-head').after(pop);
+      const draw = () => {
+        const q = $('#addQ', pop).value.toLowerCase();
+        const seqs = LIB.sequences.filter((s) => !q || s.name.toLowerCase().includes(q));
+        $('#addList', pop).innerHTML = seqs.map((s) => `<button class="add-seq" data-seq="${esc(s.name)}"><span>${esc(noExt(s.name))}</span><span class="dim">${mediaFor(s.name) ? '<i class="fas fa-music"></i> ' : ''}${s.durationMs ? dur(s.durationMs / 1000) : ''}</span></button>`).join('') || '<p class="dim">No sequences. Upload them on Files or with xLights FPP Connect.</p>';
+        $$('[data-seq]', pop).forEach((b) => (b.onclick = () => {
+          const m = mediaFor(b.dataset.seq);
+          pl[sec].push(m ? { type: 'both', enabled: 1, playOnce: 0, sequenceName: b.dataset.seq, mediaName: m } : { type: 'sequence', enabled: 1, playOnce: 0, sequenceName: b.dataset.seq });
+          save(); renderEditor(); toast(`Added ${noExt(b.dataset.seq)}`);
+        }));
+      };
+      $('#addQ', pop).oninput = draw;
+      draw();
+      $$('[data-kind]', pop).forEach((b) => (b.onclick = () => {
+        const t = b.dataset.kind;
+        pl[sec].push(t === 'pause' ? { type: 'pause', enabled: 1, duration: 5 } : t === 'command' ? { type: 'command', enabled: 1, command: '', args: [] } : { type: t, enabled: 1 });
+        openItem = `${sec}:${pl[sec].length - 1}`;
+        renderEditor();
+      }));
+      $('#addQ', pop).focus();
+      setTimeout(() => document.addEventListener('click', function close(ev) { if (!pop.contains(ev.target) && ev.target !== btn) { pop.remove(); document.removeEventListener('click', close); } }), 0);
+    };
+
+    let drag = null;
+    const wire = () => {
+      const box = $('#plEditor');
+      $('#plPlay').onclick = guard(async () => { await api('POST', P('/play'), { playlist: pl.name, repeat: !!pl.repeat }); toast(`Playing ${pl.name}`); });
+      $('#plMore').onclick = (ev) => { ev.stopPropagation(); $('#plMenu').hidden = !$('#plMenu').hidden; };
+      document.addEventListener('click', () => { if ($('#plMenu')) $('#plMenu').hidden = true; }, { once: true });
+      $$('#plMenu [data-m]').forEach((b) => (b.onclick = guard(async () => {
+        if (b.dataset.m === 'del') {
+          if (!confirm(`Delete the playlist "${pl.name}"? Schedule entries that use it will stop working.`)) return;
+          await api('DELETE', `/api/playlist/${encodeURIComponent(pl.name)}`);
+          toast('Playlist deleted'); location.hash = '#playlists';
+        } else {
+          let n = `${pl.name} copy`, k = 2;
+          while (LIB.playlists.includes(n)) n = `${pl.name} copy ${k++}`;
+          await api('POST', `/api/playlist/${encodeURIComponent(n)}`, { ...clone(pl), name: n });
+          toast(`Created ${n}`); location.hash = `#playlists/${encodeURIComponent(n)}`;
+        }
+      })));
+      $('#plRepeat').onchange = (ev) => { pl.repeat = ev.target.checked ? 1 : 0; save(); renderEditor(); };
+      $('#plRandom').onchange = (ev) => { pl.random = ev.target.checked ? 1 : 0; save(); };
+      $('#plLoops').onchange = (ev) => { pl.loopCount = Math.max(1, +ev.target.value || 1); save(); };
+      if ($('#plFill')) $('#plFill').onclick = () => {
+        const have = new Set(pl.mainPlaylist.map((e) => e.sequenceName));
+        let n = 0;
+        for (const s of LIB.sequences) {
+          if (have.has(s.name)) continue;
+          const m = mediaFor(s.name);
+          pl.mainPlaylist.push(m ? { type: 'both', enabled: 1, playOnce: 0, sequenceName: s.name, mediaName: m } : { type: 'sequence', enabled: 1, playOnce: 0, sequenceName: s.name });
+          n++;
+        }
+        toast(n ? `Added ${n} sequence${n === 1 ? '' : 's'}` : 'Every sequence is already in Main');
+        if (n) { save(); renderEditor(); }
+      };
+      $$('[data-add]', box).forEach((b) => (b.onclick = (ev) => { ev.stopPropagation(); openAdd(b.dataset.add, b); }));
+      $$('.pl-row', box).forEach((row) => {
+        const sec = row.dataset.sec, i = +row.dataset.i, e = pl[sec][i];
+        $('[data-on]', row).onchange = (ev) => { e.enabled = ev.target.checked ? 1 : 0; row.classList.toggle('off', !ev.target.checked); save(); };
+        $$('[data-open]', row).forEach((b) => (b.onclick = () => { openItem = openItem === `${sec}:${i}` ? null : `${sec}:${i}`; renderEditor(); }));
+        $('[data-del]', row).onclick = () => { pl[sec].splice(i, 1); openItem = null; save(); renderEditor(); };
+        $('[data-dup]', row).onclick = () => { pl[sec].splice(i + 1, 0, clone(e)); save(); renderEditor(); };
+        $$('[data-mv]', row).forEach((b) => (b.onclick = () => { const j = i + +b.dataset.mv; if (j < 0 || j >= pl[sec].length) return; [pl[sec][i], pl[sec][j]] = [pl[sec][j], pl[sec][i]]; openItem = null; save(); renderEditor(); }));
+        row.addEventListener('dragstart', (ev) => { drag = { sec, i }; row.classList.add('dragging'); ev.dataTransfer.effectAllowed = 'move'; try { ev.dataTransfer.setData('text/plain', 'x'); } catch {} });
+        row.addEventListener('dragend', () => { drag = null; row.classList.remove('dragging'); $$('.drop-before,.drop-after').forEach((x) => x.classList.remove('drop-before', 'drop-after')); });
+        row.addEventListener('dragover', (ev) => { if (!drag) return; ev.preventDefault(); const r = row.getBoundingClientRect(); const after = ev.clientY > r.top + r.height / 2; row.classList.toggle('drop-after', after); row.classList.toggle('drop-before', !after); });
+        row.addEventListener('dragleave', () => row.classList.remove('drop-before', 'drop-after'));
+        row.addEventListener('drop', (ev) => {
+          ev.preventDefault(); if (!drag) return;
+          const after = row.classList.contains('drop-after');
+          const [moved] = pl[drag.sec].splice(drag.i, 1);
+          let at = i + (after ? 1 : 0);
+          if (drag.sec === sec && drag.i < at) at--;
+          pl[sec].splice(at, 0, moved);
+          openItem = null; save(); renderEditor();
+        });
+      });
+      $$('[data-drop-empty]', box).forEach((z) => {
+        z.addEventListener('dragover', (ev) => { if (drag) { ev.preventDefault(); z.classList.add('over'); } });
+        z.addEventListener('dragleave', () => z.classList.remove('over'));
+        z.addEventListener('drop', (ev) => { ev.preventDefault(); if (!drag) return; const [moved] = pl[drag.sec].splice(drag.i, 1); pl[z.dataset.dropEmpty].push(moved); save(); renderEditor(); });
+      });
+      const ed = $('.item-edit', box);
+      if (ed) {
+        const sec = ed.dataset.sec, i = +ed.dataset.i, e = pl[sec][i];
+        $$('[data-type]', ed).forEach((b) => (b.onclick = () => {
+          const t = b.dataset.type;
+          const keep = { enabled: e.enabled === undefined ? 1 : e.enabled, playOnce: 0 };
+          const seq = e.sequenceName;
+          for (const k of Object.keys(e)) delete e[k];
+          Object.assign(e, { type: t }, keep);
+          if ((t === 'both' || t === 'sequence') && seq) e.sequenceName = seq;
+          if (t === 'both' && seq) e.mediaName = mediaFor(seq) || undefined;
+          if (t === 'pause') e.duration = 5;
+          if (t === 'command') { e.command = ''; e.args = []; }
+          save(); renderEditor();
+        }));
+        $$('[data-f]', ed).forEach((inp) => inp.addEventListener('change', () => {
+          const f = inp.dataset.f;
+          e[f] = f === 'duration' ? Math.max(0, +inp.value || 0) : (inp.value || undefined);
+          if (f === 'sequenceName' && e.type === 'both') e.mediaName = mediaFor(inp.value) || e.mediaName;
+          if (f === 'sequenceName') { const s = seqInfo(inp.value); if (s && s.durationMs) e.duration = s.durationMs / 1000; }
+          save(); renderEditor();
+        }));
+        if ($('#plCmdForm', ed)) commandForm($('#plCmdForm', ed), e, () => { save(); const row = $(`.pl-row[data-sec="${sec}"][data-i="${i}"] .pl-title`, box); if (row) row.textContent = itemTitle(e); });
+        $('[data-close]', ed).onclick = () => { openItem = null; renderEditor(); };
+      }
+    };
+
+    el.innerHTML = `
+      <div class="pl-layout">
+        <div class="card pl-side">
+          <div class="row"><h3 style="margin:0">Playlists</h3><span class="spacer"></span><button class="btn small primary" id="plNewBtn"><i class="fas fa-plus"></i> New</button></div>
+          <form id="plNewForm" class="row" hidden style="margin-top:10px"><input id="plNew" placeholder="Playlist name" style="flex:1;min-width:0"><button class="btn small primary">Create</button></form>
+          ${LIB.playlists.length > 6 ? '<input id="plFilter" placeholder="Search" style="width:100%;margin-top:10px">' : ''}
+          <div class="pl-list" id="plList"></div>
+        </div>
+        <div class="card pl-editor" id="plEditor"></div>
       </div>`;
-    $('#plList').innerHTML = LIB.playlists.map((n) => `<div class="row"><a href="#playlists/${encodeURIComponent(n)}">${esc(n)}</a></div>`).join('') || '<p class="muted">None yet.</p>';
-    $('#plCreate').onclick = guard(async () => {
+    $('#plNewBtn').onclick = () => { $('#plNewForm').hidden = !$('#plNewForm').hidden; if (!$('#plNewForm').hidden) $('#plNew').focus(); };
+    $('#plNewForm').onsubmit = guard(async (ev) => {
+      ev.preventDefault();
       const n = $('#plNew').value.trim();
-      if (!/^[A-Za-z0-9 _().-]+$/.test(n)) throw new Error('Use letters, numbers, spaces, - _ . ( )');
-      await api('POST', `/api/playlist/${encodeURIComponent(n)}`, { name: n, mainPlaylist: [], repeat: 1 });
+      if (!/^[A-Za-z0-9 _().'&+-]+$/.test(n)) throw new Error('Use letters, numbers, spaces and - _ . ( ) & + \'');
+      if (LIB.playlists.includes(n)) throw new Error('A playlist with that name already exists');
+      await api('POST', `/api/playlist/${encodeURIComponent(n)}`, { name: n, leadIn: [], mainPlaylist: [], leadOut: [], repeat: 1, loopCount: 0, random: 0 });
       location.hash = `#playlists/${encodeURIComponent(n)}`;
     });
-    if (sel) await editPlaylist(sel);
-  };
-
-  async function editPlaylist(name) {
-    editing = await api('GET', `/api/playlist/${encodeURIComponent(name)}`);
+    if ($('#plFilter')) $('#plFilter').oninput = (ev) => { filter = ev.target.value; renderList(); };
+    if (selName && LIB.playlists.includes(selName)) {
+      try { pl = await api('GET', `/api/playlist/${encodeURIComponent(selName)}`); for (const [k] of SECTIONS) pl[k] = pl[k] || []; } catch { pl = null; }
+    }
+    renderList();
     renderEditor();
-  }
-
-  function entryRow(e, sec, i) {
-    const seqs = LIB.sequences.map((s) => s.name);
-    const media = [...LIB.music.map((m) => m.name), ...LIB.videos.map((m) => m.name)];
-    const opt = (list, v) => `<option value="">—</option>` + list.map((x) => `<option ${x === v ? 'selected' : ''}>${esc(x)}</option>`).join('');
-    let a = '', b = '';
-    if (e.type === 'both' || e.type === 'sequence') a = `<select data-f="sequenceName">${opt(seqs, e.sequenceName)}</select>`;
-    if (e.type === 'both' || e.type === 'media') b = `<select data-f="mediaName">${opt(media, e.mediaName)}</select>`;
-    if (e.type === 'pause') a = `<input type="number" step="0.1" min="0" data-f="duration" value="${esc(e.duration ?? 5)}" title="seconds">`;
-    if (e.type === 'command') { a = `<input data-f="command" value="${esc(e.command || '')}" placeholder="FPP command name">`; b = `<input data-f="argsText" value="${esc((e.args || []).join(' | '))}" placeholder="args separated by |">`; }
-    if (e.type === 'script') a = `<select data-f="scriptName">${opt(LIB.scripts, e.scriptName)}</select>`;
-    if (!ENTRY_TYPES.includes(e.type)) a = `<span class="dim">${esc(e.type)} (kept, not played)</span>`;
-    return `<div class="entry" data-sec="${sec}" data-i="${i}">
-      <span class="handle">${i + 1}</span>
-      <select class="e-type" data-f="type">${ENTRY_TYPES.map((t) => `<option ${t === e.type ? 'selected' : ''}>${t}</option>`).join('')}</select>
-      <span>${a}</span><span class="e-media">${b}</span>
-      <label class="inline e-dur"><input type="checkbox" data-f="enabled" ${e.enabled === 0 || e.enabled === false ? '' : 'checked'}> on</label>
-      <span class="row" style="gap:4px"><button class="btn small" data-a="up">↑</button><button class="btn small" data-a="down">↓</button><button class="btn small danger" data-a="del">✕</button></span>
-    </div>`;
-  }
-
-  function renderEditor() {
-    const pl = editing;
-    const box = $('#plEditor');
-    const sec = (key, title) => `
-      <div class="section-title">${title}<span class="spacer"></span><button class="btn small" data-add="${key}">Add item</button></div>
-      <div data-section="${key}">${pl[key].map((e, i) => entryRow(e, key, i)).join('') || '<p class="dim">Empty</p>'}</div>`;
-    box.innerHTML = `
-      <div class="row"><h3 style="margin:0">${esc(pl.name)}</h3><span class="spacer"></span>
-        <button class="btn" id="plFill">Add all sequences</button>
-        <button class="btn" id="plSave">Save</button><button class="btn primary" id="plStart">Save &amp; start</button></div>
-      <div class="row" style="margin-top:10px">
-        <label class="inline"><input type="checkbox" id="plRepeat" ${pl.repeat ? 'checked' : ''}> Repeat main section</label>
-        <label class="inline"><input type="checkbox" id="plRandom" ${pl.random ? 'checked' : ''}> Shuffle</label>
-        <label class="inline">Loops <input type="number" id="plLoops" min="0" value="${pl.loopCount || 0}"></label>
-        <span class="spacer"></span><button class="btn small danger" id="plDelete">Delete playlist</button>
-      </div>
-      ${sec('leadIn', 'Lead-in')}${sec('mainPlaylist', 'Main')}${sec('leadOut', 'Lead-out')}`;
-    $$('select,input', box).forEach((inp) => inp.addEventListener('change', () => readEntry(inp)));
-    $$('[data-a]', box).forEach((b) => (b.onclick = () => {
-      const row = b.closest('.entry'); const s = row.dataset.sec; const i = +row.dataset.i; const list = editing[s];
-      if (b.dataset.a === 'del') list.splice(i, 1);
-      if (b.dataset.a === 'up' && i > 0) [list[i - 1], list[i]] = [list[i], list[i - 1]];
-      if (b.dataset.a === 'down' && i < list.length - 1) [list[i + 1], list[i]] = [list[i], list[i + 1]];
-      renderEditor();
-    }));
-    $$('[data-add]', box).forEach((b) => (b.onclick = () => { editing[b.dataset.add].push({ type: 'both', enabled: 1 }); renderEditor(); }));
-    $('#plFill').onclick = () => {
-      for (const s of LIB.sequences) {
-        const media = s.mediaFilename && [...LIB.music, ...LIB.videos].find((m) => m.name === s.mediaFilename);
-        editing.mainPlaylist.push(media ? { type: 'both', enabled: 1, sequenceName: s.name, mediaName: media.name, duration: s.durationMs / 1000 } : { type: 'sequence', enabled: 1, sequenceName: s.name, duration: s.durationMs / 1000 });
-      }
-      renderEditor();
-    };
-    const save = async () => {
-      editing.repeat = $('#plRepeat').checked ? 1 : 0;
-      editing.random = $('#plRandom').checked ? 1 : 0;
-      editing.loopCount = +$('#plLoops').value || 0;
-      editing = await api('POST', `/api/playlist/${encodeURIComponent(editing.name)}`, editing);
-      toast('Playlist saved');
-    };
-    $('#plSave').onclick = guard(save);
-    $('#plStart').onclick = guard(async () => { await save(); await api('POST', P('/play'), { playlist: editing.name, repeat: !!editing.repeat }); toast(`Started ${editing.name}`); });
-    $('#plDelete').onclick = guard(async () => {
-      if (!confirm(`Delete playlist "${editing.name}"?`)) return;
-      await api('DELETE', `/api/playlist/${encodeURIComponent(editing.name)}`);
-      location.hash = '#playlists';
-    });
-  }
-
-  function readEntry(inp) {
-    const row = inp.closest('.entry');
-    if (!row) return;
-    const e = editing[row.dataset.sec][+row.dataset.i];
-    const f = inp.dataset.f;
-    if (f === 'enabled') e.enabled = inp.checked ? 1 : 0;
-    else if (f === 'duration') e.duration = +inp.value;
-    else if (f === 'argsText') e.args = inp.value.split('|').map((x) => x.trim()).filter(Boolean);
-    else e[f] = inp.value || undefined;
-    if (f === 'type') {
-      if (!e.enabled && e.enabled !== 0) e.enabled = 1;
-      renderEditor();
-    }
-    if (f === 'sequenceName' && e.type === 'both' && !e.mediaName) {
-      const s = LIB.sequences.find((x) => x.name === e.sequenceName);
-      if (s && s.mediaFilename) { e.mediaName = s.mediaFilename; renderEditor(); }
-    }
-  }
+    loadSummaries().then(renderList).catch(() => {});
+  };
 
   // ---------------------------------------------------------------- files
   const folderFor = (name) => {
@@ -985,37 +1173,104 @@
   };
 
   // ---------------------------------------------------------------- plugins
+  const initials = (name) => String(name || '?').replace(/^fpp[-_ ]?(plugin[-_ ]?)?/i, '').split(/[\s_-]+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
+  const pluginIcon = (src, name) => `<span class="pg-icon">${src ? `<img src="${esc(src)}" alt="" loading="lazy" onerror="this.remove()">` : ''}<span>${esc(initials(name))}</span></span>`;
+  const PAGE_LABEL = { content: 'Settings', output: 'Settings', status: 'Status', help: 'Help' };
+
   PAGES.plugins = async (el) => {
-    const list = await api('GET', P('/plugins'));
-    el.innerHTML = `
-      <div class="card"><h3>Installed</h3><div class="table-wrap"><table><thead><tr><th>Plugin</th><th>Pages</th><th>Hooks</th><th></th></tr></thead><tbody>
-        ${list.map((p) => `<tr><td><b>${esc(p.displayName)}</b> <span class="dim mono">${esc(p.name)} ${esc(p.version)}</span><br><span class="muted">${esc(p.description)}</span>
-          ${p.native ? '<br><span class="pill warn">Has a native fppd part that can\'t run here</span>' : ''}</td>
-          <td>${p.pages.map((pg) => `<a href="/plugin.php?plugin=${encodeURIComponent(p.name)}&page=${encodeURIComponent(pg)}">${esc(pg)}</a>`).join('<br>') || '<span class="dim">—</span>'}</td>
-          <td class="muted">${esc(p.callbacks.join(', ') || '—')}</td>
-          <td class="row end"><button class="btn small" data-up="${esc(p.name)}">Update</button><button class="btn small danger" data-rm="${esc(p.name)}">Uninstall</button></td></tr>`).join('') || '<tr><td colspan="4" class="dim">No plugins installed.</td></tr>'}
-      </tbody></table></div></div>
-      <div class="card"><h3>Install from GitHub</h3><div class="row"><input id="plUrl" style="flex:1;min-width:240px" placeholder="https://github.com/owner/fpp-plugin"><input id="plBranch" placeholder="branch (optional)" style="width:160px"><button class="btn primary" id="plInstall">Install</button></div>
-        <p class="dim">Script and PHP plugins work: install scripts, callbacks, settings pages, api.php and plugin commands. Plugins with a native C++ part for fppd install, but that part can't run.</p>
-        <pre class="logs mono" id="plLog" hidden></pre></div>
-      <div class="card"><div class="row"><h3 style="margin:0">FPP plugin list</h3><span class="spacer"></span><button class="btn" id="plCat">Load list</button></div><div id="catalog"></div></div>`;
-    const doInstall = guard(async (url, branch) => {
-      $('#plLog').hidden = false; $('#plLog').textContent = `Installing ${url}…`;
-      const r = await api('POST', P('/plugins/install'), { url, branch: branch || undefined });
-      $('#plLog').textContent = r.log || 'Done';
-      toast(`Installed ${r.name}`);
-      setTimeout(() => PAGES.plugins(el), 1500);
-    });
-    $('#plInstall').onclick = () => doInstall($('#plUrl').value.trim(), $('#plBranch').value.trim());
-    $$('[data-up]', el).forEach((b) => (b.onclick = guard(async () => { b.disabled = true; const r = await api('POST', P(`/plugins/${encodeURIComponent(b.dataset.up)}/update`)); toast(`Updated ${r.name}`); PAGES.plugins(el); })));
-    $$('[data-rm]', el).forEach((b) => (b.onclick = guard(async () => { if (!confirm(`Uninstall ${b.dataset.rm}?`)) return; await api('DELETE', P(`/plugins/${encodeURIComponent(b.dataset.rm)}`)); toast('Uninstalled'); PAGES.plugins(el); })));
-    $('#plCat').onclick = guard(async () => {
-      $('#catalog').innerHTML = '<p class="muted">Loading…</p>';
-      const cat = await api('GET', P('/plugins/catalog'));
+    let list = await api('GET', P('/plugins'));
+    let catalog = null;
+    let tab = 'installed';
+    let q = '';
+    const pageUrl = (p, pg) => `/plugin.php?plugin=${encodeURIComponent(p.name)}&page=${encodeURIComponent(pg.page)}`;
+
+    const installedCard = (p) => {
+      // One uniform Settings button: the first setup page (content/output),
+      // else the first page. Other pages become small buttons.
+      const pages = p.pages || [];
+      const main = pages.find((x) => x.type === 'content' || x.type === 'output') || pages[0];
+      const others = pages.filter((x) => x !== main);
+      const badges = [
+        p.deprecated ? '<span class="pill warn">Deprecated</span>' : '',
+        p.native ? '<span class="pill warn" title="This plugin has a part that runs inside FPP\'s fppd. That part can\'t run in ShowPilot Player.">Native part can\'t run here</span>' : '',
+        p.hooks && p.hooks.includes('postStart') ? '<span class="pill" title="Starts a background task when the player starts">Runs in background</span>' : '',
+        p.commands && p.commands.length ? `<span class="pill" title="${esc(p.commands.join(', '))}">${p.commands.length} command${p.commands.length === 1 ? '' : 's'}</span>` : '',
+      ].join('');
+      return `<div class="pg-card" data-name="${esc(p.name)}">
+        <div class="pg-top">${pluginIcon(p.icon ? `/api/plugin/${encodeURIComponent(p.name)}/icon` : '', p.displayName)}
+          <div class="pg-info"><div class="pg-name">${esc(p.displayName)}</div>
+            <div class="pg-by dim">${p.author ? esc(p.author.replace(/\s*\(.*\)\s*$/, '')) + ' · ' : ''}<span class="mono">${esc(p.name)}${p.version ? ' @ ' + esc(p.version) : ''}</span></div></div></div>
+        <p class="pg-desc">${esc(p.description || 'No description.')}</p>
+        ${badges ? `<div class="pg-badges">${badges}</div>` : ''}
+        <div class="pg-actions">
+          ${main ? `<a class="btn primary small" href="${pageUrl(p, main)}"><i class="fas fa-gear"></i> Settings</a>` : '<span class="btn small" aria-disabled="true" title="This plugin has no settings page"><i class="fas fa-gear"></i> No settings</span>'}
+          ${others.map((x) => { const l = PAGE_LABEL[x.type]; const dup = !l || l === 'Settings' || others.filter((o) => PAGE_LABEL[o.type] === l).length > 1; return `<a class="btn small" href="${pageUrl(p, x)}" title="${esc(x.title)}">${esc(dup ? x.title : l)}</a>`; }).join('')}
+          <span class="spacer"></span>
+          ${p.homeURL ? `<a class="icon-btn2" href="${esc(p.homeURL)}" target="_blank" rel="noopener" title="Project page"><i class="fas fa-arrow-up-right-from-square"></i></a>` : ''}
+          <button class="icon-btn2" data-up="${esc(p.name)}" title="Update"><i class="fas fa-rotate"></i></button>
+          <button class="icon-btn2 danger" data-rm="${esc(p.name)}" title="Uninstall"><i class="fas fa-trash"></i></button>
+        </div></div>`;
+    };
+
+    const catalogCard = (c, have) => `<div class="pg-card small">
+        <div class="pg-top">${pluginIcon(c.icon, c.displayName)}
+          <div class="pg-info"><div class="pg-name">${esc(c.displayName)}</div><div class="pg-by dim">${esc((c.author || '').replace(/\s*\(.*\)\s*$/, ''))}</div></div></div>
+        <p class="pg-desc">${esc(c.description || '')}</p>
+        <div class="pg-actions">${c.deprecated ? '<span class="pill warn">Deprecated</span>' : ''}<span class="spacer"></span>
+          ${c.homeURL ? `<a class="icon-btn2" href="${esc(c.homeURL)}" target="_blank" rel="noopener" title="Project page"><i class="fas fa-arrow-up-right-from-square"></i></a>` : ''}
+          ${c.builtIn ? '<span class="pill ok">Built in</span>' : have ? '<span class="pill ok"><i class="fas fa-check"></i> Installed</span>' : `<button class="btn small primary" data-cat="${esc(c.infoURL)}"><i class="fas fa-download"></i> Install</button>`}</div></div>`;
+
+    const render = () => {
+      const restart = STATUS && STATUS.pluginRestart;
       const have = new Set(list.map((p) => p.name.toLowerCase()));
-      $('#catalog').innerHTML = `<table><tbody>${cat.map((c) => `<tr><td>${esc(c.name)}</td><td class="row end">${c.builtIn ? '<span class="pill ok">Built in</span>' : have.has(c.name.toLowerCase()) ? '<span class="pill">Installed</span>' : `<button class="btn small" data-cat="${esc(c.infoURL)}">Install</button>`}</td></tr>`).join('')}</tbody></table>`;
-      $$('[data-cat]', el).forEach((b) => (b.onclick = () => doInstall(b.dataset.cat)));
+      const match = (x) => !q || `${x.displayName} ${x.name} ${x.description} ${x.author}`.toLowerCase().includes(q.toLowerCase());
+      el.innerHTML = `
+        ${restart ? `<div class="card notice row"><span><i class="fas fa-rotate"></i> A plugin setting changed that needs the plugins restarted.</span><span class="spacer"></span><button class="btn primary small" id="pgRestart">Restart plugins</button></div>` : ''}
+        <div class="row tabs-row">
+          <div class="seg"><button type="button" data-tab="installed" class="${tab === 'installed' ? 'on' : ''}">Installed (${list.length})</button><button type="button" data-tab="browse" class="${tab === 'browse' ? 'on' : ''}">Browse FPP plugins</button><button type="button" data-tab="url" class="${tab === 'url' ? 'on' : ''}">Install from URL</button></div>
+          <span class="spacer"></span>${tab !== 'url' ? `<input id="pgQ" placeholder="Search" value="${esc(q)}" style="width:200px">` : ''}
+        </div>
+        ${tab === 'installed' ? `<div class="pg-grid">${list.filter(match).map(installedCard).join('') || `<div class="empty"><p>${list.length ? 'No match.' : 'No plugins installed yet.'}</p>${list.length ? '' : '<p class="dim">Browse FPP\'s plugin list to add one.</p>'}</div>`}</div>
+          <p class="dim" style="margin-top:14px">FPP script and PHP plugins run here: settings pages, commands, callbacks, background tasks and api.php. Parts written for FPP's fppd in C++ can't run.</p>` : ''}
+        ${tab === 'browse' ? `<div id="pgCat">${catalog ? `<div class="pg-grid">${catalog.filter(match).map((c) => catalogCard(c, have.has(c.repoName.toLowerCase()) || have.has(c.name.toLowerCase()))).join('') || '<p class="dim">No match.</p>'}</div>` : '<p class="muted">Loading FPP\'s plugin list…</p>'}</div>` : ''}
+        ${tab === 'url' ? `<div class="card"><h3>Install from a git URL</h3><div class="row"><input id="plUrl" style="flex:1;min-width:240px" placeholder="https://github.com/owner/fpp-plugin"><input id="plBranch" placeholder="branch (optional)" style="width:160px"><button class="btn primary" id="plInstall">Install</button></div>
+          <p class="dim">A GitHub repository, or a link to a plugin's pluginInfo.json.</p></div>` : ''}
+        <div class="card" id="plLogCard" hidden><div class="row"><h3 style="margin:0" id="plLogTitle">Installing…</h3><span class="spacer"></span><button class="btn small" id="plLogClose">Close</button></div><pre class="logs mono" id="plLog"></pre></div>`;
+      $$('[data-tab]', el).forEach((b) => (b.onclick = () => { tab = b.dataset.tab; render(); if (tab === 'browse' && !catalog) loadCatalog(); }));
+      if ($('#pgQ')) $('#pgQ').oninput = (ev) => { q = ev.target.value; const pos = ev.target.selectionStart; render(); const i = $('#pgQ'); i.focus(); i.setSelectionRange(pos, pos); };
+      if ($('#pgRestart')) $('#pgRestart').onclick = guard(async () => { $('#pgRestart').disabled = true; await api('POST', P('/plugins/restart')); toast('Plugins restarted'); if (STATUS) STATUS.pluginRestart = false; render(); });
+      if ($('#plInstall')) $('#plInstall').onclick = () => doInstall($('#plUrl').value.trim(), $('#plBranch').value.trim());
+      $$('[data-cat]', el).forEach((b) => (b.onclick = () => { b.disabled = true; doInstall(b.dataset.cat); }));
+      $$('[data-up]', el).forEach((b) => (b.onclick = guard(async () => {
+        b.disabled = true; b.innerHTML = '<i class="fas fa-rotate fa-spin"></i>';
+        try { const r = await api('POST', P(`/plugins/${encodeURIComponent(b.dataset.up)}/update`)); toast(/Already up to date/i.test(r.log || '') ? `${r.name} is up to date` : `Updated ${r.name}`); list = await api('GET', P('/plugins')); }
+        finally { render(); }
+      })));
+      $$('[data-rm]', el).forEach((b) => (b.onclick = guard(async () => {
+        if (!confirm(`Uninstall ${b.dataset.rm}? Its settings file is kept.`)) return;
+        await api('DELETE', P(`/plugins/${encodeURIComponent(b.dataset.rm)}`)); toast('Uninstalled');
+        list = await api('GET', P('/plugins')); render();
+      })));
+      if ($('#plLogClose')) $('#plLogClose').onclick = () => { $('#plLogCard').hidden = true; };
+    };
+    const loadCatalog = guard(async () => {
+      try { catalog = await api('GET', P('/plugins/catalog')); }
+      catch (e) { catalog = []; toast('Could not load FPP\'s plugin list: ' + e.message, true); }
+      if (tab === 'browse') render();
     });
+    const doInstall = guard(async (url, branch) => {
+      if (!url) throw new Error('Enter a URL');
+      $('#plLogCard').hidden = false; $('#plLogTitle').textContent = 'Installing…'; $('#plLog').textContent = `Installing ${url}…`;
+      $('#plLogCard').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      try {
+        const r = await api('POST', P('/plugins/install'), { url, branch: branch || undefined });
+        list = await api('GET', P('/plugins'));
+        tab = 'installed'; render();
+        $('#plLogCard').hidden = false; $('#plLogTitle').textContent = `Installed ${r.name}`; $('#plLog').textContent = r.log || 'Done';
+        toast(`Installed ${r.name}`);
+      } catch (e) { $('#plLogTitle').textContent = 'Install failed'; $('#plLog').textContent = e.message; throw e; }
+    });
+    render();
   };
 
   // ---------------------------------------------------------------- FPP backup restore
@@ -1104,6 +1359,7 @@
           <label>Name on the network <input id="host" value="${esc(CONFIG.hostName)}"></label>
           <label>Description <input id="desc" value="${esc(CONFIG.hostDescription)}"></label>
           <label>Audio output <select id="adev"><option value="auto">Automatic — ${esc(ad.auto || 'USB card if present')}</option>${ad.devices.map((d) => `<option value="${esc(d.id)}" ${d.id === CONFIG.audioDevice ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select></label>
+          <label>Theme <select id="theme">${(window.SPPTheme ? SPPTheme.list : [['auto', 'Automatic']]).map(([v, l]) => `<option value="${v}" ${v === ((CONFIG.ui && CONFIG.ui.theme) || 'auto') ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
           <label>Timezone (schedules use local time) <select id="tz">${tz.zones.map((z) => `<option ${z === tz.current ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select></label>
           <p class="dim">There is no volume control on purpose: set the level once at your amplifier or transmitter.</p>
           <button class="btn primary" id="saveSys">Save</button></div></div>
@@ -1122,9 +1378,10 @@
         <div class="row"><label class="btn" for="bkFile" style="display:inline-flex">Choose backup file…</label><input type="file" id="bkFile" accept=".json,application/json" hidden><span class="dim" id="bkName">In FPP: Content Setup → File Manager → Backups, or Status/Control → Backups → Download.</span></div>
         <div id="bkBody"></div></div>
       <div class="card"><div class="row"><h3 style="margin:0">Log</h3><span class="spacer"></span><button class="btn small" id="refLog">Refresh</button></div><pre class="logs mono" id="log"></pre></div>`;
+    $('#theme').onchange = (ev) => { if (window.SPPTheme) SPPTheme.set(ev.target.value); };
     $('#saveSys').onclick = guard(async () => {
       if ($('#tz').value && $('#tz').value !== tz.current) await api('PUT', P('/timezone'), { timezone: $('#tz').value });
-      await saveConfig({ hostName: $('#host').value.trim(), hostDescription: $('#desc').value, audioDevice: $('#adev').value });
+      await saveConfig({ hostName: $('#host').value.trim(), hostDescription: $('#desc').value, audioDevice: $('#adev').value, ui: { theme: $('#theme').value } });
     });
     $('#setPw').onclick = guard(async () => { await api('POST', P('/auth/password'), { password: $('#pw').value }); toast('Password set'); PAGES.system(el); });
     if ($('#clrPw')) $('#clrPw').onclick = guard(async () => { if (!confirm('Remove the admin password?')) return; await api('POST', P('/auth/password'), { password: '' }); toast('Password removed'); PAGES.system(el); });
@@ -1178,6 +1435,8 @@
   };
 
   // ---------------------------------------------------------------- boot
+  // The theme is saved with the player's settings; follow it on every device.
+  api('GET', P('/config')).then((c) => { CONFIG = CONFIG || c; if (window.SPPTheme && c.ui && c.ui.theme && c.ui.theme !== SPPTheme.current()) SPPTheme.set(c.ui.theme); }).catch(() => {});
   pollStatus();
   route();
 })();

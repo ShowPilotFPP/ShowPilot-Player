@@ -1,9 +1,92 @@
-:root { --bg: #f6f7f9; --fg: #1d232b; --muted: #5b6573; --line: #d9dde3; --accent: #1f6feb; color-scheme: light dark; }
-@media (prefers-color-scheme: dark) { :root { --bg: #11151a; --fg: #e6e9ee; --muted: #9aa4b2; --line: #2a313b; --accent: #5b9dff; } }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
-.spp-bar { display: flex; gap: 16px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); }
-.spp-bar a { color: var(--accent); text-decoration: none; }
-.spp-bar span { color: var(--muted); }
-.spp-plugin { padding: 16px; max-width: 1100px; }
-.spp-toast { position: fixed; right: 16px; bottom: 16px; background: #1d232b; color: #fff; padding: 10px 14px; border-radius: 8px; z-index: 9999; }
-.spp-toast.err { background: #b42318; }
+/* ShowPilot Player frame for FPP plugin pages. Plugin pages are written for
+   FPP's Bootstrap 5 look; this maps Bootstrap onto the player's theme
+   (themes.css) and gives FPP's own classes (.buttons, .settingsTable, ...)
+   a matching style. */
+:root, [data-bs-theme] {
+  --bs-body-bg: var(--bg);
+  --bs-body-color: var(--text);
+  --bs-secondary-color: var(--text-muted);
+  --bs-tertiary-color: var(--text-dim);
+  --bs-secondary-bg: var(--bg-tertiary);
+  --bs-tertiary-bg: var(--bg-elevated);
+  --bs-emphasis-color: var(--text);
+  --bs-border-color: var(--border);
+  --bs-border-radius: 8px;
+  --bs-link-color: var(--rgb-blue);
+  --bs-link-hover-color: var(--rgb-blue);
+  --bs-link-color-rgb: 59, 130, 246;
+  --bs-primary: var(--accent);
+  --bs-focus-ring-color: var(--accent-soft);
+  --bs-card-bg: var(--bg-elevated);
+}
+body.spp-plugin-page { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+
+.spp-bar { position: sticky; top: 0; z-index: 1030; display: flex; gap: 12px; align-items: center; padding: 10px 18px;
+  background: var(--bg-elevated); border-bottom: 1px solid var(--border); }
+.spp-bar a.spp-back { color: var(--text-muted); text-decoration: none; font-size: 13px; }
+.spp-bar a.spp-back:hover { color: var(--text); }
+.spp-bar .spp-icon { width: 26px; height: 26px; border-radius: 6px; object-fit: contain; background: var(--bg-tertiary); }
+.spp-bar .spp-title { font-weight: 650; font-size: 15px; }
+.spp-bar .spp-spacer { flex: 1; }
+.spp-flag { color: var(--warn); font-size: 13px; margin-right: 6px; }
+.spp-plugin { padding: 18px 20px 60px; max-width: 1280px; }
+
+/* Bootstrap pieces plugins use, in theme colours */
+.card { background-color: var(--bg-elevated); border-color: var(--border); color: var(--text); }
+.btn-primary { --bs-btn-bg: var(--accent); --bs-btn-border-color: var(--accent); --bs-btn-hover-bg: var(--accent-hover); --bs-btn-hover-border-color: var(--accent-hover);
+  --bs-btn-active-bg: var(--accent-hover); --bs-btn-color: var(--accent-text); --bs-btn-hover-color: var(--accent-text); }
+.btn-outline-primary { --bs-btn-color: var(--accent); --bs-btn-border-color: var(--accent); --bs-btn-hover-bg: var(--accent); --bs-btn-hover-border-color: var(--accent); }
+.nav-tabs { --bs-nav-tabs-border-color: var(--border); --bs-nav-tabs-link-active-bg: var(--bg-elevated); --bs-nav-tabs-link-active-color: var(--text);
+  --bs-nav-tabs-link-active-border-color: var(--border) var(--border) var(--bg-elevated); --bs-nav-link-color: var(--text-muted); --bs-nav-link-hover-color: var(--text); }
+.nav-pills { --bs-nav-pills-link-active-bg: var(--accent); }
+.table { --bs-table-bg: transparent; --bs-table-color: var(--text); --bs-table-border-color: var(--border); --bs-table-striped-bg: var(--bg-tertiary); --bs-table-hover-bg: var(--bg-tertiary); }
+.modal { --bs-modal-bg: var(--bg-elevated); --bs-modal-border-color: var(--border); --bs-modal-header-border-color: var(--border); --bs-modal-footer-border-color: var(--border); }
+.form-control, .form-select { background-color: var(--bg-input); border-color: var(--border); color: var(--text); }
+.form-control:focus, .form-select:focus { background-color: var(--bg-input); color: var(--text); border-color: var(--border-hover); box-shadow: 0 0 0 .2rem var(--accent-soft); }
+.text-muted { color: var(--text-muted) !important; }
+.text-white { color: var(--text) !important; }
+.bg-light { background-color: var(--bg-tertiary) !important; }
+.bg-dark { background-color: var(--bg-elevated) !important; }
+
+/* Inputs plugins print without Bootstrap classes */
+.spp-plugin input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=color]):not([type=range]):not(.form-control),
+.spp-plugin select:not(.form-select), .spp-plugin textarea:not(.form-control) {
+  background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font: inherit; max-width: 100%; }
+.spp-plugin input[type=checkbox], .spp-plugin input[type=radio] { accent-color: var(--accent); width: 16px; height: 16px; vertical-align: middle; }
+
+/* FPP's own classes */
+.buttons, .spp-plugin input[type=button], .spp-plugin input[type=submit], .spp-plugin button:not(.btn):not(.btn-close):not(.nav-link):not(.accordion-button):not(.ui-button):not(.chip) {
+  background: var(--bg-tertiary); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 6px 14px; font: inherit; cursor: pointer; }
+.buttons:hover, .spp-plugin input[type=button]:hover, .spp-plugin input[type=submit]:hover { border-color: var(--border-hover); }
+.buttons.btn-success, .buttons.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.buttons:disabled, .disableButtons { opacity: .5; cursor: default; }
+.settingsTable .row { padding: 6px 0; border-bottom: 1px solid var(--border); align-items: center; }
+.settingsTable .row:last-child { border-bottom: 0; }
+.settingsGroupTable { margin-left: 4px; }
+.printSettingLabelCol .description { color: var(--text); }
+.backdrop, .pageContent { background: transparent; }
+.title, .spp-plugin h1, .spp-plugin h2 { color: var(--text); }
+.spp-plugin h1 { font-size: 22px; font-weight: 650; }
+.spp-plugin h2 { font-size: 18px; font-weight: 650; margin-top: 12px; }
+.spp-plugin fieldset { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 16px; margin: 0 0 14px; }
+.spp-plugin legend { float: none; width: auto; padding: 0 6px; font-size: 15px; font-weight: 600; }
+.spp-plugin hr { border-color: var(--border); opacity: 1; }
+.spp-plugin table:not(.table) th, .spp-plugin table:not(.table) td { padding: 4px 8px; vertical-align: middle; }
+.spp-plugin a { color: var(--rgb-blue); }
+pre.spp-file { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; }
+
+/* jQuery UI in theme colours */
+.ui-widget, .ui-widget input, .ui-widget select, .ui-widget button { font-family: inherit; font-size: inherit; }
+.ui-widget-content { background: var(--bg-elevated); color: var(--text); border-color: var(--border); }
+.ui-widget-header { background: var(--bg-tertiary); color: var(--text); border-color: var(--border); }
+.ui-state-default, .ui-widget-content .ui-state-default, .ui-widget-header .ui-state-default { background: var(--bg-tertiary); color: var(--text); border-color: var(--border); }
+.ui-state-active, .ui-widget-content .ui-state-active { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.ui-state-default a, .ui-state-active a { color: inherit; }
+.ui-dialog { box-shadow: var(--shadow-elevated); }
+
+#spp-toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 2000; }
+.spp-toast { background: var(--bg-elevated); color: var(--text); border: 1px solid var(--border); border-left: 3px solid var(--ok); border-radius: 8px; padding: 10px 14px; box-shadow: var(--shadow-elevated); max-width: 380px; }
+.spp-toast.err { border-left-color: var(--bad); }
+.spp-toast.warn { border-left-color: var(--warn); }
+
+@media (max-width: 700px) { .spp-plugin { padding: 14px 12px 50px; } .spp-bar { padding: 10px 12px; } }

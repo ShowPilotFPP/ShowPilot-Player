@@ -18,7 +18,7 @@ const { Scheduler } = require('./lib/scheduler');
 const { MultiSync } = require('./lib/multisync');
 const { ShowPilotClient } = require('./lib/showpilot');
 const { Plugins, FPPDIR } = require('./lib/plugins');
-const { runPhp } = require('./lib/fppcompat/php');
+const { runPhp, stopAll: stopPhp } = require('./lib/fppcompat/php');
 const pkg = require('./package.json');
 
 // Put the FPP shim where plugins look for it, unless a real FPP owns /opt/fpp.
@@ -150,6 +150,7 @@ async function main() {
     try { await show.stopNow(); } catch {}
     try { await player.close(); } catch {}
     try { await plugins.hook('postStop'); } catch {}
+    stopPhp();
     server.close();
     process.exit(0);
   };

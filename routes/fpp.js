@@ -120,7 +120,29 @@ module.exports = function fppRoutes(ctx) {
   }
   r.get('/fppd/status', (req, res) => res.json(status()));
   r.get('/system/status', (req, res) => res.json({ ...status(), advancedView: systemInfo() }));
-  r.get('/system/fppd/restart', async (req, res) => { await plugins.loadAll().catch(() => {}); res.json({ status: 'OK' }); });
+  // FPP's "Restart FPPD": for ShowPilot Player that means restarting the
+  // plugins (stop/start hooks, reload). The show keeps playing.
+  const restartPlugins = async (req, res) => { await plugins.restart().catch(() => {}); res.json({ status: 'OK' }); };
+  r.get('/system/fppd/restart', restartPlugins);
+  r.post('/system/fppd/restart', restartPlugins);
+  r.get('/system/fppd/start', restartPlugins);
+  r.get('/fppd/schedule', (req, res) => {
+    const sched = require('../lib/scheduler');
+    const up = ctx.scheduler ? ctx.scheduler.upcoming(7) : [];
+    const sec = (d) => Math.floor(new Date(d).getTime() / 1000);
+    res.json({ status: 'OK', schedule: { enabled: ctx.scheduler ? (ctx.scheduler.enabled ? 1 : 0) : 0,
+      entries: sched.load().map((e, i) => ({ id: i, enabled: e.enabled ? 1 : 0, type: e.type, playlist: e.type === 'command' ? '' : sched.targetName(e), command: e.command, args: e.args,
+        startTimeStr: e.startTime, endTimeStr: e.endTime, repeat: e.repeat ? 1 : 0 })),
+      items: up.map((u) => ({ id: u.index, playlist: u.type === 'command' ? '' : u.name, command: u.type === 'command' ? u.name : '', startTime: sec(u.start), endTime: u.end ? sec(u.end) : sec(u.start),
+        startTimeStr: new Date(u.start).toLocaleString(), endTimeStr: u.end ? new Date(u.end).toLocaleString() : '' })) } });
+  });
+  // Pixel overlay models are stored but not driven by ShowPilot Player yet;
+  // answer like an FPP with no overlay models so plugin pages still load.
+  r.get('/overlays/models', (req, res) => res.json([]));
+  r.get('/overlays/fonts', (req, res) => res.json([]));
+  r.get('/overlays/effects', (req, res) => res.json([]));
+  r.get('/overlays/model/:name', (req, res) => res.status(404).json({ Status: 'Error', Message: 'No overlay models on ShowPilot Player' }));
+  r.all('/overlays/model/:name/*', (req, res) => res.status(404).json({ Status: 'Error', Message: 'No overlay models on ShowPilot Player' }));
   r.get('/cape', (req, res) => res.status(404).json({ id: 'No Cape!' }));
   r.get('/proxies', (req, res) => res.json([]));
   // ---- xLights FPP Connect: UDP Out (controller list) -> Player outputs.
@@ -393,6 +415,16 @@ module.exports = function fppRoutes(ctx) {
       res.json({ Status: 'OK', Message: '', plugin: dir, loaded: action === 'load' });
     } catch (e) { res.status(500).json({ Status: 'Error', Message: e.message }); }
   });
+  // Plugin icon, like FPP: icon.png in the plugin, else pluginInfo.json iconURL.
+  r.get('/plugin/:repo/icon', (req, res) => {
+    const f = plugins.iconFile(req.params.repo);
+    if (f) return res.set('Cache-Control', 'max-age=3600').sendFile(f);
+    const u = plugins.iconURL(req.params.repo);
+    if (u) return res.redirect(u);
+    res.status(404).end();
+  });
+  // FPP's plugin manager asks this; updates are done from the Plugins page.
+  r.post('/plugin/:repo/updates', (req, res) => res.json({ Status: 'OK', Message: '', updatesAvailable: 0 }));
   r.all('/plugin/:repo/*', raw, (req, res) => {
     const repo = req.params.repo;
     if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(repo)) return res.status(404).end();

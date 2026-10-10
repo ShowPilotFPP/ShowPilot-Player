@@ -8,6 +8,7 @@ process.env.SPP_PORT = String(30000 + Math.floor(Math.random() * 20000));
 process.env.SPP_FPPDIR = path.join(__dirname, '..', 'fpp-compat');
 process.env.SPP_AUDIO_NULL = '1';
 process.env.SPP_DISPLAY = '0';
+process.env.SPP_CGI_DETACH_MS = '1500';
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -168,4 +169,60 @@ test('command presets, the commands list and FPP backup restore over HTTP', asyn
   const sch = await (await fetch(`${B}/api/player/schedule`)).json();
   assert.equal(sch.entries.length, 0, 'schedule not picked, not touched');
   assert.ok(sch.holidays.some((h) => h.shortName === 'Thanksgiving'));
+});
+
+test('FPP plugin compatibility: page frame, settings.json groups, icons, hooks, long-running pages', { skip: !has('php-cgi') && 'php-cgi not installed' }, async () => {
+  const dir = path.join(process.env.SPP_MEDIA_DIR, 'plugins', 'fpp-c');
+  fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'js'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'pluginInfo.json'), JSON.stringify({ repoName: 'fpp-c', name: 'Compat Test', author: 'x', description: 'DEPRECATED - test' }));
+  fs.writeFileSync(path.join(dir, 'menu.inc'), "<?php\n$menuEntries = Array(\n Array('text' => 'Compat Setup', 'type' => 'content', 'page' => 'content.php', 'wrap' => 1),\n Array('type' => 'status', 'text' => 'Compat Status', 'page' => 'status.php'),\n);\n");
+  // settings.json-driven page (PrintSettingGroup), the most common FPP pattern.
+  fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({
+    settingGroups: { main: { description: 'Main Settings', settings: ['Enabled', 'Mode', 'ApiKey'] } },
+    settings: { Enabled: { name: 'Enabled', description: 'Enable', type: 'checkbox', default: '1' },
+      Mode: { name: 'Mode', description: 'Mode', type: 'select', options: { Fast: 'fast', Slow: 'slow' }, default: 'slow' },
+      ApiKey: { name: 'ApiKey', description: 'API key', type: 'password' } } }));
+  fs.writeFileSync(path.join(dir, 'content.php'), '<? require "common.php"; PrintSettingGroup("main", "", "", 1, "fpp-c"); echo "|", $pluginSettings["Mode"], "|", ParseBooleanValue("on") ? "T" : "F", "|", getFPPVersionFloat(); ?>');
+  fs.writeFileSync(path.join(dir, 'js', 'extra.js'), 'window.extraLoaded = 1;');
+  fs.writeFileSync(path.join(dir, 'icon.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
+  fs.writeFileSync(path.join(dir, 'slow.php'), '<?php require "common.php"; DisableOutputBuffering(); echo "first"; flush(); sleep(4); file_put_contents("' + path.join(process.env.SPP_MEDIA_DIR, 'logs', 'slow-done') + '", "1"); echo "second";');
+  // A postStart hook that leaves a background job holding stdout (like fpp-nfl's `php nfl.php &`).
+  fs.writeFileSync(path.join(dir, 'scripts', 'postStart.sh'), '#!/bin/bash\nsleep 20 &\necho started > "$MEDIADIR/logs/c-started"\n', { mode: 0o755 });
+  await ctx.plugins.loadAll();
+
+  const info = ctx.plugins.list().find((p) => p.name === 'fpp-c');
+  assert.deepEqual(info.pages.map((x) => [x.page, x.title, x.type]), [['content.php', 'Compat Setup', 'content'], ['status.php', 'Compat Status', 'status']]);
+  assert.equal(info.icon, true);
+  assert.equal(info.deprecated, true);
+  assert.deepEqual(info.hooks, ['postStart']);
+  const icon = await fetch(`${B}/api/plugin/fpp-c/icon`);
+  assert.equal(icon.status, 200);
+  assert.match(icon.headers.get('content-type'), /png/);
+
+  const t0 = Date.now();
+  await ctx.plugins.hook('postStart', 'fpp-c');
+  assert.ok(Date.now() - t0 < 5000, 'a hook that backgrounds a job returns right away');
+  assert.ok(fs.existsSync(path.join(process.env.SPP_MEDIA_DIR, 'logs', 'c-started')));
+
+  const full = await (await fetch(`${B}/plugin.php?plugin=fpp-c&page=content.php`)).text();
+  for (const s of ['bootstrap.bundle.min.js', 'jquery-ui.min.js', 'fontawesome', 'var pluginSettings', 'file=js/extra.js', 'id="modalDialogBase"', '/api/plugin/fpp-c/icon']) assert.ok(full.includes(s), s);
+  assert.match(full, /<h2>Main Settings<\/h2>/);
+  assert.match(full, /id='Enabled'[^>]*checked/);
+  assert.match(full, /<option value='slow' selected>Slow<\/option>/);
+  assert.match(full, /type='password' id='ApiKey'/);
+  assert.match(full, /function EnabledChanged\(\)/);
+  assert.match(full, /\|slow\|T\|10/);
+
+  const t1 = Date.now();
+  const slow = await fetch(`${B}/plugin.php?plugin=fpp-c&page=slow.php&nopage=1`);
+  const body = await slow.text();
+  assert.ok(Date.now() - t1 < 3500, 'a long-running page answers without waiting for it');
+  assert.equal(body, 'first');
+  await new Promise((r) => setTimeout(r, 3500));
+  assert.ok(fs.existsSync(path.join(process.env.SPP_MEDIA_DIR, 'logs', 'slow-done')), 'and keeps running, as under Apache');
+
+  for (const u of ['/api/overlays/models', '/api/fppd/schedule', '/api/playlists/playable']) assert.equal((await fetch(B + u)).status, 200, u);
+  assert.equal((await (await fetch(`${B}/api/plugin/fpp-c/updates`, { method: 'POST' })).json()).Status, 'OK');
+  assert.equal((await fetch(`${B}/api/configfile/schedule.json`, { method: 'POST', body: '[]' })).status, 403);
 });

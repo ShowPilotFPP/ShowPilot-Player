@@ -1,0 +1,5 @@
+#!/bin/bash
+# ShowPilot Player: older FPP plugins call this from their install script.
+# The player has already fetched the plugin; updates are done from the
+# Plugins page.
+exit 0

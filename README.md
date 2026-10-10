@@ -17,7 +17,8 @@ It is an alternative to FPP for shows that drive their pixels over the network. 
 - **FPP MultiSync**: as the player, your FPP remotes (video, matrix, extra outputs) follow it unchanged; it can also run as a remote.
 - **Video and virtual matrix** on HDMI, following the same clock.
 - **ShowPilot built in**: no plugin to install. Requests, votes, interrupts, cooldowns and phone audio positions.
-- **FPP script and PHP plugins** from GitHub or FPP's plugin list (native C++ fppd plugins are not supported).
+- **FPP script and PHP plugins** from GitHub or FPP's plugin list, with the same settings pages, commands and background tasks as on FPP (native C++ fppd plugins are not supported).
+- **Themes** from ShowPilot: Stage dark/light and seasonal themes for Christmas, Halloween and more.
 
 ## Install
 
