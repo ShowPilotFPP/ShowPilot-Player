@@ -12,6 +12,7 @@ const paths = require('../lib/paths');
 const playlists = require('../lib/playlists');
 const { FseqFile } = require('../lib/fseq');
 const settingsFile = require('../lib/fppcompat/settings-file');
+const presets = require('../lib/presets');
 const { runPhp } = require('../lib/fppcompat/php');
 const { COMPAT_MAJOR, COMPAT_MINOR, VERSION_STRING } = require('../lib/multisync');
 const { FPPDIR } = require('../lib/plugins');
@@ -172,9 +173,13 @@ module.exports = function fppRoutes(ctx) {
     if (!f || !fs.existsSync(f)) return res.status(404).json({ Status: 'Error', Message: 'not found' });
     res.sendFile(f);
   });
+  // The player's own files are not writable here (different formats from
+  // FPP's, and this API is open); commandPresets.json is FPP's format and is.
+  const PRIVATE_CFG = new Set(['showpilot-player.json', 'schedule.json']);
   r.post('/configfile/:name', express.raw({ type: () => true, limit: '32mb' }), (req, res) => {
     const f = cfgFile(req.params.name);
     if (!f) return res.status(400).json({ Status: 'Error', Message: 'bad name' });
+    if (PRIVATE_CFG.has(path.basename(f))) return res.status(403).json({ Status: 'Error', Message: 'this file is managed by ShowPilot Player' });
     fs.writeFileSync(f + '.tmp', Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
     fs.renameSync(f + '.tmp', f);
     res.json({ Status: 'OK', Message: '' });
@@ -348,6 +353,17 @@ module.exports = function fppRoutes(ctx) {
 
   // ------------------------------------------------------------ commands
   r.get('/commands', (req, res) => res.json(commands.list()));
+  r.get('/commandPresets', (req, res) => {
+    if (req.query.names === 'true' || req.query.names === '1') return res.json(presets.names());
+    res.json(presets.load());
+  });
+  r.get('/commandPresets/:name', (req, res) => {
+    const row = presets.load().commands.find((c) => c.name === req.params.name);
+    if (!row) return res.status(404).json({ status: 'not found' });
+    res.json(row);
+  });
+  r.get('/scripts', (req, res) => res.json(listDir('scripts')));
+  r.get('/playlists/playable', (req, res) => res.json(playlists.list().filter((n) => !n.startsWith('_'))));
   r.get('/commands/:name', (req, res) => {
     const c = commands.get(req.params.name);
     if (!c) return res.status(404).json({ status: 'not found' });

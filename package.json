@@ -1,6 +1,6 @@
 {
   "name": "showpilot-player",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "description": "Lean show player for xLights sequences: fseq + audio on one clock, DDP/E1.31 output, video, virtual matrix, FPP MultiSync, FPP Connect uploads, FPP script plugins and ShowPilot built in.",
   "main": "server.js",
   "scripts": {

@@ -10,7 +10,9 @@ It is an alternative to FPP for shows that drive their pixels over the network. 
 
 - **Sequence + audio in sync.** The lights follow the measured audio position, not a guess. Interrupted songs resume at the exact spot.
 - **DDP and E1.31 output**, packet-for-packet the same as FPP.
-- **Playlists and schedules**: lead-in, main loop and lead-out; shuffle; times by clock or by dusk/sunset.
+- **Playlists and schedules**: lead-in, main loop and lead-out; shuffle; times by clock or by dusk/sunset; seasons by date or holiday ("Thanksgiving + 1 day until Jan 6").
+- **Commands and presets**, like FPP's: run commands on a schedule (every N minutes if you like), from playlists or from xLights; group them into presets that can also run on events such as a playlist stopping.
+- **Restore from an FPP backup**: bring over playlists, schedule, presets, scripts, controller outputs and settings, picking exactly what you want.
 - **xLights FPP Connect**: add the player in FPP Connect and upload sequences and media as you would to an FPP.
 - **FPP MultiSync**: as the player, your FPP remotes (video, matrix, extra outputs) follow it unchanged; it can also run as a remote.
 - **Video and virtual matrix** on HDMI, following the same clock.
@@ -48,6 +50,8 @@ You only flash a card once.
 3. Upload sequences and audio from xLights (FPP Connect) or the **Files** page.
 4. **Playlists**: create one and press *Add all sequences*.
 5. **Schedule**: set your show times (set your location to use dusk).
+
+Moving from FPP? Download a backup in FPP, then use **System → Restore from an FPP backup** and tick what you want to bring over.
 6. Optional: **ShowPilot** (server URL + show token), **MultiSync**, **Video & Matrix**, **Plugins**.
 
 There is no volume control on purpose: set the level once at your amplifier or FM transmitter.

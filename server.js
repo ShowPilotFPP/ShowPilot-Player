@@ -13,6 +13,7 @@ const log = require('./lib/log');
 const { Player } = require('./lib/engine/player');
 const { Show } = require('./lib/show');
 const { Commands, registerCore } = require('./lib/commands');
+const { PresetRunner } = require('./lib/presets');
 const { Scheduler } = require('./lib/scheduler');
 const { MultiSync } = require('./lib/multisync');
 const { ShowPilotClient } = require('./lib/showpilot');
@@ -59,16 +60,18 @@ async function main() {
   await plugins.hook('preStart');
 
   await player.start();
-  registerCore(commands, { show, player });
-  commands.register('Run Script', {
-    args: [{ name: 'script', type: 'string' }, { name: 'args', type: 'string' }],
-    run: ([script, args]) => {
-      const f = paths.fileIn('scripts', script);
-      if (!f || !fs.existsSync(f)) throw new Error('script not found');
-      const p = require('child_process').spawn('/bin/bash', [f, ...String(args || '').split(' ').filter(Boolean)], { cwd: paths.dir('scripts'), detached: true, stdio: 'ignore' });
-      p.unref();
-    },
+  const presetRunner = new PresetRunner({
+    commands,
+    sendMultisync: (cmd, args, hosts) => ctx.multisync && ctx.multisync.sendCommand(cmd, args, hosts),
+    log: (m) => log.info('presets', m),
   });
+  ctx.presets = presetRunner;
+  const later = (fn) => setTimeout(fn, 500);
+  registerCore(commands, { show, player, presets: presetRunner, system: {
+    restart: () => later(() => process.exit(0)),
+    reboot: () => later(() => require('child_process').execFile('systemctl', ['reboot'], () => {})),
+    shutdown: () => later(() => require('child_process').execFile('systemctl', ['poweroff'], () => {})),
+  } });
   show.runCommand = (name, args) => commands.run(name, args);
 
   const multisync = new MultiSync({ config, player, commands });
@@ -85,10 +88,20 @@ async function main() {
   show.on('playlist', (info) => plugins.emitPlaylist(info).catch(() => {}));
   show.queryNext = (info) => plugins.emitPlaylist({ ...info, Action: 'query_next', Section: 'MainPlaylist', Item: info.index });
   player.on('start', (e) => plugins.emitMedia(e));
+
+  // FPP's reserved command preset names fire on show events.
+  show.on('playlist', (info) => {
+    if (info.Action === 'start') presetRunner.fire('PLAYLIST_STARTED', { PLAYLIST_NAME: info.name || '' });
+    if (info.Action === 'stop') presetRunner.fire('PLAYLIST_STOPPED', { PLAYLIST_NAME: info.name || '' });
+  });
+  show.on('stopping', (how) => presetRunner.fire(how === 'now' ? 'PLAYLIST_STOPPING_NOW' : how === 'afterLoop' ? 'PLAYLIST_STOPPING_AFTER_LOOP' : 'PLAYLIST_STOPPING_GRACEFULLY'));
+  player.on('start', (e) => presetRunner.fire('MEDIA_STARTED', { MEDIA_NAME: e.media || '', SEQUENCE_NAME: e.sequence || '' }));
+  for (const ev of ['end', 'stop']) player.on(ev, (e) => presetRunner.fire('MEDIA_STOPPED', { MEDIA_NAME: (e && e.media) || '', SEQUENCE_NAME: (e && e.sequence) || '' }));
   await plugins.loadAll();
 
-  const scheduler = new Scheduler({ show, commands, config });
+  const scheduler = new Scheduler({ show, commands, config, presets: presetRunner });
   ctx.scheduler = scheduler;
+  scheduler.multisync = multisync;
   scheduler.on('log', (m) => log.info('schedule', m));
   scheduler.enabled = config.get().mode !== 'remote';
   scheduler.start();
@@ -112,6 +125,7 @@ async function main() {
   server.on('error', (e) => { log.error('main', `cannot listen on ${port}: ${e.message}`); process.exit(1); });
 
   await plugins.hook('postStart');
+  presetRunner.fire('FPPD_STARTED');
 
   let stopping = false;
   const shutdown = async (sig) => {
@@ -119,6 +133,7 @@ async function main() {
     stopping = true;
     log.info('main', `${sig}: shutting down`);
     try { await plugins.hook('preStop'); } catch {}
+    try { await presetRunner.trigger('FPPD_STOPPED'); } catch {}
     scheduler.stop();
     showpilot.close();
     multisync.close();

@@ -2,7 +2,7 @@
 
 Context for anyone (usually Claude) working on ShowPilot Player. Read this before changing code. It supersedes the earlier concept primer that lived outside the repo.
 
-**Status: v0.1.6, first build; first boot on a real Pi 4B done (found the issues fixed in 0.1.3).** Everything below is implemented and covered by tests in a Linux dev environment with mpv on a null audio device. It has **not yet run on a Raspberry Pi**, driven real controllers, played to HDMI, or been built into an SD image (the image workflow runs on GitHub). The Phase 1 measurements below are the next step.
+**Status: v0.2.0.** Running on a Raspberry Pi 4B with real controllers and a USB sound card (0.1.6 timing measured there, see Testing). 0.2.0 adds FPP-style commands and command presets, a reworked scheduler (sequences, repeat-every, holidays) and FPP backup restore; those are covered by automated tests and a browser check, not yet used on a Pi. HDMI video/matrix and a full show night are still to check (Phase 1 list).
 
 ---
 
@@ -24,7 +24,9 @@ It is an option, not a replacement for FPP. Operators who need direct pixel outp
 ### In
 - `.fseq` v1/v2.0–2.2 playback (none/zstd/zlib, sparse ranges, ESEQ) with audio on one clock
 - DDP and E1.31 output (Art-Net: maybe later, on request)
-- Playlists (FPP JSON format) and a scheduler (clock times or dawn/sunrise/sunset/dusk)
+- Playlists (FPP JSON format) and a scheduler (clock times or dawn/sunrise/sunset/dusk, holidays, repeat-every)
+- FPP commands and command presets (FPP `commandPresets.json`), runnable from the schedule
+- Restore from an FPP backup file, item by item
 - Video to HDMI and a virtual matrix, both following the master clock
 - FPP MultiSync master and remote
 - xLights FPP Connect (discovery + chunked uploads + meta checks)
@@ -109,6 +111,39 @@ test/                     node:test suites
 - An item with both sequence and media ends when both have ended (FPP "both").
 - Entry types played: both, sequence, media, pause, command, script, playlist (nested). Others are kept in the file and skipped with a log line.
 
+- `stopGracefully(afterLoop)`: plain = finish the current item then lead-out; `afterLoop` = finish the main loop then lead-out (FPP `Stop Gracefully` with `loop=true`). Emits `stopping` (`now` | `graceful` | `afterLoop`) for the reserved presets.
+- `start()` takes a playlist name **or a playlist object** (scheduled sequences use `playlists.forSequence(seq)`: one item, with the audio named in the fseq header when that file exists; `type: 'sequence'` without it).
+
+### Commands and presets (`lib/commands.js`, `lib/presets.js`)
+
+- Registry entries carry FPP's `/api/commands` description shape: `name, description, category, args[{name, type, description, optional, min, max, default, contentListUrl | contents}]`. The UI builds every command form from this (bool → checkbox, `contents` → select, `contentListUrl` → select filled from that FPP API path, int → number). Plugin commands get category `Plugin: <name>`; ShowPilot's get `ShowPilot`.
+- Core commands use FPP's exact names and arg order: Start Playlist, Start Playlist At Item, Insert Playlist After Current/Immediate, Stop Now, **Stop Gracefully (`loop`)**, Stop Gracefully After Loop (old Player name, kept), Next/Prev/Restart Playlist Item, Pause/Resume/Toggle Playlist, All Lights Off, **URL (`name` = URL, `method` GET|POST, `data`; http(s) only, 10 s timeout)**, **Run Script (`script`, `args`, `env` "A=1,B=2")**, **Trigger Command Preset (`name`)**, **Trigger Command Preset Slot (`slot` 1–255)**, Trigger Multiple Command Presets (`NameA`..`NameF`), Restart FPPD, Reboot/Shutdown (`confirm` must be true), Volume* (accepted no-ops).
+- Presets are stored as FPP's `media/config/commandPresets.json`: `{commands:[{name, presetSlot, command, args, multisyncCommand, multisyncHosts?}]}`. **Rows that share a `name` are one preset** (run in file order); there is no nested list. A slot fires every row with that slot. `%KEYWORD%` in args is replaced (e.g. `%PLAYLIST_NAME%`). A recursion guard skips a preset already running (a preset that triggers itself runs once).
+- Reserved names fired by the player (same as fppd): `FPPD_STARTED`, `FPPD_STOPPED`, `PLAYLIST_STARTED`/`STOPPED` (keyword `PLAYLIST_NAME`), `PLAYLIST_STOPPING_NOW`/`GRACEFULLY`/`AFTER_LOOP`, `MEDIA_STARTED`/`STOPPED` (`MEDIA_NAME`, `SEQUENCE_NAME`). Not fired: `OUTPUTS_*`, `EFUSE_TRIGGERED`, `PLAYLIST_START_TMINUS_NNN`.
+- `multisyncCommand: true` sends the command to remotes as an FPP command packet (type 6: byte 7 = arg count, then NUL-terminated hosts, command, args) via `MultiSync.sendCommand`, and also runs it locally.
+- API: FPP `GET /api/commandPresets` (`?names=true` → names), `/api/commandPresets/:name`, `/api/scripts`, `/api/playlists/playable` (hides `_`-prefixed internal playlists); FPP's UI saving `POST /api/configfile/commandPresets.json` writes the same file. Player: `GET/PUT /api/player/presets` (grouped `{presets:[{name, presetSlot, commands}]}`; duplicate names rejected), `POST /api/player/presets/run`, `POST /api/player/command` (optional `multisyncCommand`/`multisyncHosts`).
+
+### Scheduler (`lib/scheduler.js`)
+
+- Own format in `media/config/schedule.json` (not FPP's; FPP schedules convert on restore). Entry: `{id, enabled, type: playlist|sequence|command, playlist, sequence, repeat, repeatEvery (min), command, args, multisyncCommand, multisyncHosts, days[0..6], startDate, startDateOffset, endDate, endDateOffset, startTime, startOffset, endTime, endOffset, stopType: graceful|loop|hard}`.
+- Times: `HH:MM` (24:00 allowed) or `dawn|sunrise|sunset|dusk` + offset minutes. End ≤ start runs past midnight; the start day is the day that counts.
+- Dates: `''`, `YYYY-MM-DD`, `0000-MM-DD` (every year; ranges wrap Dec→Jan), or a holiday shortName (FPP's names, `lib/holidays.js`: US + global fixed/nth-weekday/Easter-based ones, plus `config/user-holidays.json` in FPP format) with a day offset (holidays only, as in FPP). Ranges are checked against the previous and current year so a Thanksgiving+1 → Jan 6 season works across New Year.
+- Commands without `repeatEvery` fire once at the start time (window = start + 2 min catch-up); with `repeatEvery` they fire every N minutes until the end. Fired keys `<id>@<startISO>#<n>`, pruned after 3 days. Booting more than 2 minutes after a due time does not fire it.
+- Playlists/sequences own the show for their window (first live entry in list order wins). `repeatEvery` on a show = play once, then start again every N minutes while nothing is playing. At the end only **the run this entry started** is stopped — compared by the identity of the show runner's base frame saved after `show.start`, not by name, so a manual start of the same playlist later in the window wins (`hard` → Stop Now, `loop` → after loop, else graceful).
+- The occurrence key contains the resolved start time, so editing a live entry, changing the location or dusk drifting changes it. The same entry id + same target is treated as the same window (active switches over, no stop/restart mid-song).
+- A one-sided yearly date range stays inside the calendar year, as in FPP (which compares month-day against its literal default bound): "from every year Dec 1" = Dec 1–31; "until every year Jan 6" = Jan 1–6. Holiday lookups are cached (user-holidays file re-read at most every 5 s) because the next-run scan resolves dates for every entry and day.
+- `GET /api/player/schedule` → `{entries, upcoming (7 days), next (per-entry next run), holidays, enabled}`.
+- UI: entry cards with a plain-language summary, next-run chip, on/off switch, move/copy/edit/delete (each change saves immediately); editor sections What / Days (chips + presets) / Time (clock or sun + plus/minus minutes, with today's resolved time) / Playback (repeat, play once, play once every N; finish song / finish loop / stop now) / Dates (any, date, every year on, holiday ± days). "Coming up" grouped by day.
+
+### FPP backup restore (`lib/fpp-backup.js`)
+
+- Input: FPP's downloaded JSON backup (not zipped). Text files in it are line arrays (`join("\n")` then parse); JSON files are wrapped in a one-element array; settings are `settings.system_settings[0]` (all strings). Any `__fppBlob` reference is rejected (on-device copies only; the user must download from FPP's UI).
+- `analyze()` → `{meta, sections[{id, label, note, items[{id, label, detail, checked, disabled, warnings}]}], skipped, warnings}`; `restore(backup, selection)` writes only picked items. Sections: settings (name/description, location, timezone, MultiSync enabled/remotes/multicast/broadcast, player/remote mode, audio output only when a card with that ALSA id exists), schedule (replace or add), playlists, command presets (merge by name), scripts (chmod 755), outputs (universes → E1.31/DDP via `outputs-map`, model overlays, virtual display map), plugin settings files (`config/plugin.<name>`), custom holidays.
+- FPP schedule conversion: `playlist == ""` → command; `sequence: 1` → sequence; day codes 0–6, 7 everyday, 8 weekdays, 9 weekend, 10 MWF, 11 TuTh, 12 Sun–Thu, 13 Fri/Sat, 14/15 odd/even (**unsupported → every day + warning**), `0x10000|mask` (Sun 0x4000 … Sat 0x0100); `SunRise/SunSet/Dawn/Dusk` and legacy `25:00:00`/`26:00:00`; offsets kept only on sun times (FPP ignores them on clock times); `repeat` 1 → repeat, ≥100 → every `repeat/100` minutes; dates `2019-01-01`/`2099-12-31` (FPP defaults) → none, monthly `0000-00-DD` unsupported; `stopType` 0/1/2 → graceful/hard/loop.
+- Restore re-converts the schedule with the holidays present at that moment; a dropped date limit (e.g. a custom holiday left unticked) is reported in `problems`. Malformed fields (bad `backup_taken`, null playlist items) don't block the rest of the file.
+- Never restored: network/Wi-Fi, passwords/email, pixel-string/panel/PWM/other outputs, channel inputs, GPIO, output processors, EEPROM. The UI lists these under "Not restored".
+- UI: System → Restore from an FPP backup (file read in the browser, sent to `/api/player/backup/inspect` then `/restore`; that path accepts JSON up to 64 MB).
+
 ---
 
 ## Formats and protocols (implemented from FPP/xLights source, Oct 2026)
@@ -173,10 +208,11 @@ Wire-compatible with the ShowPilot server's plugin API; the server cannot tell i
 ## Storage and security
 
 - Media tree mirrors FPP: `/home/fpp/media/{sequences,music,videos,effects,images,scripts,playlists,config,logs,plugins,plugindata,upload,virtualdisplay_assets}`. `SPP_MEDIA_DIR` overrides for dev/tests.
-- Player settings: `media/config/showpilot-player.json`. Schedule: `media/config/schedule.json`. Log: `media/logs/showpilot-player.log` (5 MB rotate).
+- Player settings: `media/config/showpilot-player.json`. Schedule: `media/config/schedule.json`. Command presets: `media/config/commandPresets.json` (FPP format). Custom holidays: `media/config/user-holidays.json`. Log: `media/logs/showpilot-player.log` (5 MB rotate).
 - Secrets: `media/plugindata/showpilot-player/` (show token, UI password scrypt hash, session secret).
 - Optional admin password protects `/api/player/*` (signed cookie, 30 days, 5 attempts/min). The FPP-compatible API stays open, as on FPP, because xLights and plugins call it without logging in. The Player is meant for a show LAN.
 - Every file name from HTTP, MultiSync or playlists goes through `paths.safeName` (bare names only).
+- `POST /api/configfile/<name>` (open FPP API) refuses the player's own `showpilot-player.json` and `schedule.json`; FPP-format files such as `commandPresets.json` stay writable.
 - Plugin names must match `^[A-Za-z0-9_][A-Za-z0-9_.-]*$` everywhere (Node and the PHP shim): no `.`, `..` or hidden names. The PHP shim also checks the resolved plugin folder is a direct child of `plugins/`. (A looser `[A-Za-z0-9_.-]+` let `..` through: file reads under the media folder, executing uploaded PHP, and `DELETE /api/player/plugins/..` wiping media. Caught in review before release; regression-tested.)
 - Plugin (CGI) output is untrusted: invalid header names and statuses outside 100–599 are dropped/turned into 502, inside a try/catch, because a throw in that event handler would stop the show.
 - Player transitions (`play`, `pause`, `stop`, end-of-item) run through one promise chain (`_serial`), because the show runner, MultiSync and HTTP commands can all trigger them and they share one audio mpv.
@@ -201,7 +237,7 @@ Wire-compatible with the ShowPilot server's plugin API; the server cannot tell i
 
 ## Testing
 
-`npm test` (node:test, runs serially): fseq round-trips (none/zstd/zlib, sparse, two zstd frames in one block, meta shape), DDP/E1.31/MultiSync packet bytes, matrix layout, show runner rules with a fake player (lead-in/main/lead-out, insert immediate with exact resume, insert after current, cooldown skip without wrap, graceful stop, repeat), scheduler overnight windows, sun times, real mpv playback (pause/resume event and position, fps, clock vs frame), and the HTTP API (discovery, chunked upload + 400/409 cases, playlists/commands, plugin settings/page/api/command with php-cgi).
+`npm test` (node:test, runs serially): fseq round-trips (none/zstd/zlib, sparse, two zstd frames in one block, meta shape), DDP/E1.31/MultiSync packet bytes, matrix layout, show runner rules with a fake player (lead-in/main/lead-out, insert immediate with exact resume, insert after current, cooldown skip without wrap, graceful stop, repeat), scheduler overnight windows, sun times, FPP backup analyze/restore from a fixture (`test/fixtures/fpp-backup.json`), FPP schedule conversion (day codes, sun times, repeat), holiday/every-year date ranges, repeat-every commands and scheduled sequences, command presets (file format, slots, keywords, loop guard) and their HTTP API, real mpv playback (pause/resume event and position, fps, clock vs frame), and the HTTP API (discovery, chunked upload + 400/409 cases, playlists/commands, plugin settings/page/api/command with php-cgi).
 
 Also verified by hand in the dev environment (v0.1.0):
 - 40 fps sustained, average frame lateness ~0.5–1 ms, rate 25.000–25.004 ms/frame (no drift), resume lands on the exact frame (frame 160 for a 4.000 s pause).
@@ -210,8 +246,12 @@ Also verified by hand in the dev environment (v0.1.0):
 - Against a real ShowPilot server (main branch): heartbeat registered as `player-0.1.0`, sync-sequences + audio cache upload, Jukebox request queued 3 s before song end and played next, interrupt request played immediately then the schedule song resumed at ~4.5 s, phone WebSocket reported the resumed position (4.958 s), not 0.
 - xLights-style 3-chunk PATCH upload byte-identical; Insert Playlist Immediate with a lead-in in the remote playlist resolved the right item.
 
+### Measured on a Raspberry Pi 4B (v0.1.6, USB sound card, 2026-10)
+- Full song (3138 frames at 40 fps, DDP/E1.31 to real controllers, MultiSync sending): **0 frames over 20 ms late**, average 0.6 ms, worst 5 ms in any second; block decode 4.7 ms on the decode thread. Before the 0.1.6 scheduler fix the same song had 42 of 2894 frames over 20 ms late.
+- Lights and USB audio in sync by eye in daylight; a night check is still to do.
+
 ### Phase 1 measurements still to do (on a Pi 4/5 with USB or HDMI audio)
-1. An evening of repeated plays: Dashboard "Late >20 ms (song)" and max lateness per song; tune `Nice`/CPU isolation if needed.
+1. An evening of repeated plays (single songs done, see above): Dashboard "Late >20 ms (song)" across a whole show night.
 2. Lights vs speakers at song start and end with the real audio chain (camera + clap or a light/audio test sequence); set `syncOffsetMs` for the fixed gap; confirm no growing gap.
 3. Interrupt/resume by ear and by video.
 4. HDMI: video follower and matrix FIFO on DRM (no desktop), including switching between them between songs.
@@ -234,7 +274,8 @@ Also verified by hand in the dev environment (v0.1.0):
 - Video files in ShowPilot sync: extract audio for the phone stream (the plugin had `extract_audio.php`).
 - Art-Net output if requested.
 - Per-output de-duplication (FPP option) if controllers need it.
-- FPP schedule import (FPP `schedule.json` format) for migrating operators.
+- Odd/even-day and monthly schedule dates from FPP (converted to every day / no date limit today).
+- Pixel overlay models are stored but not run (no overlay commands yet).
 - Remote mode: optional local schedule fallback when no master is heard.
 
 ---
@@ -243,6 +284,7 @@ Also verified by hand in the dev environment (v0.1.0):
 
 | Version | Change | Checked |
 |---|---|---|
+| 0.2.0 | FPP-style commands and command presets (Commands page; FPP `commandPresets.json`; URL, Run Script with env, Trigger Command Preset/Slot/Multiple, Stop Gracefully `loop`, Restart/Reboot/Shutdown; reserved event presets; MultiSync command packets). Scheduler: sequences, commands with any args and "repeat every N minutes", play-once-every-N for shows, finish-the-loop stop, holidays and every-year dates. Schedule page redesigned (summaries, next-run, editor sections, coming-up by day). Restore from an FPP backup with per-item selection (System page). | 34 tests pass under UTC and Pacific/Auckland (8 new backup/scheduler/preset tests + an HTTP test); an independent review before release found and fixed: one-sided yearly date ranges running all year, the scheduler stopping a manual start of the same playlist, a live-entry edit restarting the show mid-song, a custom holiday silently dropped on restore, malformed backup fields blocking the whole file, and open writes to the player's own config files; schedule, commands and restore pages checked in a browser at desktop and phone widths. |
 | 0.1.0 | First build (independent code review before release fixed plugin-name traversal, CGI crash, concurrent player transitions, pip option names, command-arg decoding and scheduler pruning): audio-clocked fseq playback with PLL-disciplined clock and exact resume; DDP/E1.31; playlists, inserts, scheduler with dusk/sunset; MultiSync master/remote + discovery; video and virtual matrix via a display mpv; xLights FPP Connect API; FPP script/PHP plugin host with `/opt/fpp` shim; built-in ShowPilot client and audio daemon; admin UI with optional password, timezone, updater; pi-gen image pipeline, install script, ShipPilot/test/image workflows. | 21 automated tests; manual runs against mpv (null audio), crafted MultiSync packets, and a local ShowPilot server. Not yet run on a Pi. |
 | 0.1.6 | First Pi 4 timing numbers: 40 fps, 0.8 ms average lateness, but 42 of 2894 frames (1.5%) over 20 ms late and 9 ms block decodes on the timing thread. Root cause of the late frames was a scheduler boundary race (see Frame worker → Scheduling rule): wake-ups now target the frame after the last one sent. Block decoding moved to its own thread with buffer recycling; `inlineDecodes` stat added. | 100,000-channel zstd sequence at 40 fps with a pause/resume, 3 runs: 0 frames over 10 ms late (before: 4–12 per run), worst 2.7–6 ms, 0 inline decodes. Playback test now fails if more than one frame is over 20 ms late. 25 tests pass. |
 | 0.1.5 | From the first real Pi test: no audio from a USB sound card and no lights. Audio now always uses ALSA (`--ao=alsa`; a root service on Pi OS Lite has no PipeWire/Pulse session, which is what the `pw.conf client.conf` errors were) and "Automatic" prefers a USB sound card from `/proc/asound/cards` (`lib/audio-devices.js`), else the system default; the output setting applies live via mpv's `audio-device` property and shows on the Dashboard. Display mpv uses `--vo=gpu --gpu-context=drm` when there is no desktop (the `XDG_RUNTIME_DIR` error). xLights writes the media's full PC path into the fseq `mf` header (often `C:\...`), which Linux `path.basename` doesn't split: media names now keep only the part after the last `/` or `\\`. Dashboard warns when no controller outputs exist (xLights only sends controllers when FPP Connect "UDP Out" is "All"). FPP-compatible API writes are logged (`fpp-api` lines) so FPP Connect traffic is visible. Dashboard Play dropdown has Playlists and Sequences groups; a sequence plays with its audio. | 25 tests pass (new: USB card preference, Windows/Mac media paths); grouped dropdown checked in the browser. |

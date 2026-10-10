@@ -132,3 +132,32 @@ test('FPP Connect: models, UDP outputs and config files', async () => {
   assert.equal(await (await fetch(`${B}/api/configfile/virtualdisplaymap`)).text(), '# map');
   assert.equal((await fetch(`${B}/api/configfile/..%2Fsettings`)).status >= 400, true);
 });
+
+test('command presets, the commands list and FPP backup restore over HTTP', async () => {
+  const J = { 'Content-Type': 'application/json' };
+  const list = await (await fetch(`${B}/api/commands`)).json();
+  const names = list.map((c) => c.name);
+  for (const n of ['URL', 'Trigger Command Preset', 'Trigger Command Preset Slot', 'Run Script', 'Stop Gracefully']) assert.ok(names.includes(n), n);
+  assert.ok(list.every((c) => c.category), 'every command has a category');
+  const put = await fetch(`${B}/api/player/presets`, { method: 'PUT', headers: J,
+    body: JSON.stringify({ presets: [{ name: 'Off', presetSlot: 2, commands: [{ command: 'All Lights Off', args: [] }] }] }) });
+  assert.equal(put.status, 200);
+  assert.deepEqual(await (await fetch(`${B}/api/commandPresets?names=true`)).json(), ['Off']);
+  const fpp = await (await fetch(`${B}/api/commandPresets`)).json();
+  assert.equal(fpp.commands[0].presetSlot, 2);
+  assert.equal(await (await fetch(`${B}/api/command/Trigger%20Command%20Preset/Off`)).text(), '1 command run');
+  const dup = await fetch(`${B}/api/player/presets`, { method: 'PUT', headers: J, body: JSON.stringify({ presets: [{ name: 'A', commands: [] }, { name: 'A', commands: [] }] }) });
+  assert.equal(dup.status, 400);
+
+  const backup = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'fpp-backup.json'), 'utf8'));
+  const info = await (await fetch(`${B}/api/player/backup/inspect`, { method: 'POST', headers: J, body: JSON.stringify({ backup }) })).json();
+  assert.ok(info.sections.some((s) => s.id === 'schedule'));
+  const res = await (await fetch(`${B}/api/player/backup/restore`, { method: 'POST', headers: J,
+    body: JSON.stringify({ backup, selection: { presets: ['Lights Off'], scripts: ['lights-on.sh'] } }) })).json();
+  assert.deepEqual(res.problems, []);
+  assert.deepEqual((await (await fetch(`${B}/api/commandPresets?names=true`)).json()).sort(), ['Lights Off', 'Off']);
+  assert.deepEqual(await (await fetch(`${B}/api/scripts`)).json(), ['lights-on.sh']);
+  const sch = await (await fetch(`${B}/api/player/schedule`)).json();
+  assert.equal(sch.entries.length, 0, 'schedule not picked, not touched');
+  assert.ok(sch.holidays.some((h) => h.shortName === 'Thanksgiving'));
+});

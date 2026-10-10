@@ -55,7 +55,7 @@
 
   // ---------------------------------------------------------------- router
   const PAGES = {};
-  const TITLES = { dashboard: 'Dashboard', playlists: 'Playlists', files: 'Files', schedule: 'Schedule', outputs: 'Outputs',
+  const TITLES = { dashboard: 'Dashboard', playlists: 'Playlists', files: 'Files', schedule: 'Schedule', commands: 'Commands', outputs: 'Outputs',
     display: 'Video & Matrix', multisync: 'MultiSync', showpilot: 'ShowPilot', plugins: 'Plugins', system: 'System' };
   let current = null;
   let pageTimer = null;
@@ -64,6 +64,7 @@
     const name = (location.hash.slice(1) || 'dashboard').split('/')[0];
     const page = PAGES[name] ? name : 'dashboard';
     clearInterval(pageTimer); pageTimer = null;
+    LISTS = {};
     current = page;
     $$('#nav a').forEach((a) => a.classList.toggle('on', a.dataset.page === page));
     $('#pageTitle').textContent = TITLES[page];
@@ -358,58 +359,476 @@
     })));
   };
 
-  // ---------------------------------------------------------------- schedule
-  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const TIME_SPECS = ['dawn', 'sunrise', 'sunset', 'dusk'];
-  PAGES.schedule = async (el) => {
-    await Promise.all([loadConfig(), loadLib()]);
-    let { entries, upcoming } = await api('GET', P('/schedule'));
-    const sun = await api('GET', P('/suntimes')).catch(() => ({}));
-    const timeField = (v, f) => `<select data-f="${f}Kind"><option value="time" ${TIME_SPECS.includes(v) ? '' : 'selected'}>Time</option>${TIME_SPECS.map((t) => `<option ${t === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
-      <input type="time" data-f="${f}" value="${TIME_SPECS.includes(v) ? '' : esc(v)}" ${TIME_SPECS.includes(v) ? 'hidden' : ''}>`;
+  // ---------------------------------------------------------------- commands (shared)
+  // FPP-style command picker: a command list grouped by category and a form
+  // built from each command's argument descriptions.
+  let CMDS = null;
+  let LISTS = {};
+  const loadCmds = async () => (CMDS = await api('GET', P('/commands')));
+  const contentList = (url) => {
+    if (!LISTS[url]) {
+      LISTS[url] = api('GET', '/' + url.replace(/^\/+/, ''))
+        .then((r) => (Array.isArray(r) ? r.map((x) => (typeof x === 'string' ? x : (x && (x.name || x.Name)) || String(x))) : []))
+        .catch(() => []);
+    }
+    return LISTS[url];
+  };
+  const cmdDesc = (name) => (CMDS || []).find((c) => c.name === name);
+  const isTrue = (v) => /^(true|1|yes)$/i.test(String(v));
+
+  // One-line description of a command and its arguments.
+  function cmdSummary(c) {
+    if (!c || !c.command) return 'No command chosen';
+    if (c.command === 'Trigger Command Preset' && c.args && c.args[0]) return `Preset: ${c.args[0]}${c.multisyncCommand ? ' · also on remotes' : ''}`;
+    const d = cmdDesc(c.command);
+    const parts = (c.args || []).map((v, i) => {
+      const a = d && d.args && d.args[i];
+      if (a && a.type === 'bool') return isTrue(v) ? (a.description || a.name).toLowerCase() : '';
+      if (a && a.default !== undefined && String(a.default) === String(v)) return ''; // defaults add nothing
+      return v;
+    }).filter((v) => v !== '' && v !== undefined);
+    return `${c.command}${parts.length ? ' · ' + parts.join(' · ') : ''}${c.multisyncCommand ? ' · also on remotes' : ''}`;
+  }
+
+  // Renders a command form into `box`. `val` ({ command, args, multisyncCommand,
+  // multisyncHosts }) is edited in place; onChange runs after each edit.
+  function commandForm(box, val, onChange = () => {}, { multisync = true } = {}) {
+    const cats = {};
+    for (const c of CMDS || []) (cats[c.category || 'Other'] = cats[c.category || 'Other'] || []).push(c);
+    const order = ['Playlist', 'Presets', 'Lights', 'System', 'ShowPilot', 'Media'];
+    const catNames = Object.keys(cats).sort((a, b) => ((order.indexOf(a) + 1) || 99) - ((order.indexOf(b) + 1) || 99) || a.localeCompare(b));
+    const render = () => {
+      const d = cmdDesc(val.command);
+      val.args = Array.isArray(val.args) ? val.args : [];
+      const argDefs = d ? d.args || [] : val.args.map((_, i) => ({ name: `arg${i + 1}`, type: 'string', description: `Argument ${i + 1}` }));
+      box.innerHTML = `
+        <label>Command <select data-cmd>
+          <option value="">Choose a command…</option>
+          ${!d && val.command ? `<option selected value="${esc(val.command)}">${esc(val.command)} (not available on this player)</option>` : ''}
+          ${catNames.map((cat) => `<optgroup label="${esc(cat)}">${cats[cat].map((c) => `<option ${c.name === val.command ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</optgroup>`).join('')}
+        </select></label>
+        ${d && d.description ? `<p class="dim cmd-help">${esc(d.description)}</p>` : ''}
+        <div class="cmd-args">${argDefs.map((a, i) => argField(a, i)).join('')}</div>
+        ${multisync ? `<div class="row cmd-ms"><label class="inline"><input type="checkbox" data-ms ${val.multisyncCommand ? 'checked' : ''}> Also send to MultiSync remotes</label>
+          <input data-mshosts placeholder="Only these remotes (blank = all)" value="${esc(val.multisyncHosts || '')}" ${val.multisyncCommand ? '' : 'hidden'} style="flex:1;min-width:180px"></div>` : ''}`;
+      $('[data-cmd]', box).onchange = (e) => {
+        val.command = e.target.value;
+        const nd = cmdDesc(val.command);
+        val.args = nd ? (nd.args || []).map((a) => (a.default !== undefined ? String(a.default) : a.type === 'bool' ? 'false' : '')) : [];
+        render(); onChange();
+      };
+      $$('[data-arg]', box).forEach((inp) => {
+        const i = +inp.dataset.arg;
+        const set = () => { val.args[i] = inp.type === 'checkbox' ? String(inp.checked) : inp.value; trim(); onChange(); };
+        inp.addEventListener(inp.type === 'checkbox' || inp.tagName === 'SELECT' ? 'change' : 'input', set);
+      });
+      // Fill lists that come from the API (playlists, scripts, presets).
+      $$('[data-list]', box).forEach(async (sel) => {
+        const items = await contentList(sel.dataset.list);
+        const cur = sel.dataset.cur;
+        if (sel.tagName === 'SELECT') {
+          sel.innerHTML = `<option value="">Choose…</option>${items.map((n) => `<option ${n === cur ? 'selected' : ''}>${esc(n)}</option>`).join('')}${cur && !items.includes(cur) ? `<option selected>${esc(cur)}</option>` : ''}`;
+        } else {
+          const dl = $(`#${sel.getAttribute('list')}`, box);
+          if (dl) dl.innerHTML = items.map((n) => `<option value="${esc(n)}">`).join('');
+        }
+      });
+      if ($('[data-ms]', box)) {
+        $('[data-ms]', box).onchange = (e) => { val.multisyncCommand = e.target.checked; $('[data-mshosts]', box).hidden = !e.target.checked; onChange(); };
+        $('[data-mshosts]', box).oninput = (e) => { val.multisyncHosts = e.target.value; onChange(); };
+      }
+    };
+    // Drop trailing empty optional args, as FPP does.
+    const trim = () => { while (val.args.length && val.args[val.args.length - 1] === '') { const d = cmdDesc(val.command); const a = d && d.args && d.args[val.args.length - 1]; if (a && !a.optional) break; val.args.pop(); } };
+    const argField = (a, i) => {
+      const v = val.args[i] !== undefined ? val.args[i] : (a.default !== undefined ? String(a.default) : '');
+      const lab = esc(a.description || a.name) + (a.optional ? ' <span class="dim">(optional)</span>' : '');
+      if (a.type === 'bool') return `<label class="inline"><input type="checkbox" data-arg="${i}" ${isTrue(v) ? 'checked' : ''}> ${esc(a.description || a.name)}</label>`;
+      if (a.contents && a.contents.length) return `<label>${lab}<select data-arg="${i}">${a.contents.map((o) => `<option ${String(o) === v ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select></label>`;
+      if (a.contentListUrl) return `<label>${lab}<select data-arg="${i}" data-list="${esc(a.contentListUrl)}" data-cur="${esc(v)}"><option>${esc(v)}</option></select></label>`;
+      if (a.type === 'int' || a.type === 'range') return `<label>${lab}<input type="number" data-arg="${i}" value="${esc(v)}" ${a.min !== undefined ? `min="${a.min}"` : ''} ${a.max !== undefined ? `max="${a.max}"` : ''}></label>`;
+      return `<label>${lab}<input data-arg="${i}" value="${esc(v)}"></label>`;
+    };
+    // Fill in defaults so a freshly picked command is complete.
+    const d0 = cmdDesc(val.command);
+    if (d0) (d0.args || []).forEach((a, i) => { if (val.args[i] === undefined && !a.optional) val.args[i] = a.default !== undefined ? String(a.default) : a.type === 'bool' ? 'false' : ''; });
+    render();
+  }
+
+  // ---------------------------------------------------------------- commands page
+  PAGES.commands = async (el) => {
+    await loadCmds();
+    let { presets, reserved } = await api('GET', P('/presets'));
+    let editing = null; // index into presets, or 'new'
+    let draft = null;
+    const quick = { command: '', args: [] };
+    const RES_HELP = {
+      FPPD_STARTED: 'when the player starts', FPPD_STOPPED: 'when the player shuts down',
+      PLAYLIST_STARTED: 'when a playlist starts', PLAYLIST_STOPPED: 'when a playlist stops',
+      PLAYLIST_STOPPING_NOW: 'on Stop Now', PLAYLIST_STOPPING_GRACEFULLY: 'on a graceful stop', PLAYLIST_STOPPING_AFTER_LOOP: 'on stop after loop',
+      MEDIA_STARTED: 'when each song starts', MEDIA_STOPPED: 'when each song ends',
+    };
+    const savePresets = async () => { ({ presets, reserved } = await api('PUT', P('/presets'), { presets })); };
+
+    const presetView = (p, i) => `
+      <div class="item" data-i="${i}">
+        <div class="item-main">
+          <div class="item-title">${esc(p.name)} ${p.presetSlot ? `<span class="pill">Slot ${p.presetSlot}</span>` : ''} ${RES_HELP[p.name] ? `<span class="pill ok">Runs ${esc(RES_HELP[p.name])}</span>` : ''}</div>
+          <ol class="cmd-list">${p.commands.map((c) => `<li>${esc(cmdSummary(c))}</li>`).join('')}</ol>
+        </div>
+        <div class="item-actions"><button class="btn small" data-run>Run</button><button class="btn small" data-edit>Edit</button><button class="btn small danger" data-del aria-label="Delete">Delete</button></div>
+      </div>`;
+
+    const editorView = () => `
+      <div class="item editing">
+        <div class="fields">
+          <label>Preset name <input id="pName" list="pReserved" value="${esc(draft.name)}" placeholder="e.g. Lights off">
+            <datalist id="pReserved">${reserved.map((n) => `<option value="${esc(n)}">${esc(RES_HELP[n] || '')}</option>`).join('')}</datalist></label>
+          <label>Slot number <span class="dim">(optional)</span><input type="number" id="pSlot" min="0" max="255" value="${draft.presetSlot || ''}" placeholder="none"></label>
+        </div>
+        <p class="dim">Name a preset after a player event (pick from the list) to run it automatically, e.g. PLAYLIST_STOPPED.</p>
+        <div id="pCmds"></div>
+        <div class="row"><button class="btn" id="pAdd">+ Add a command</button><span class="spacer"></span>
+          <button class="btn" id="pCancel">Cancel</button><button class="btn primary" id="pSave">Save preset</button></div>
+      </div>`;
+
+    const renderCmds = () => {
+      const box = $('#pCmds');
+      box.innerHTML = draft.commands.map((_, j) => `<div class="sub" data-j="${j}"><div class="sub-head"><b>${j + 1}</b><span class="spacer"></span>
+        <button class="btn small" data-up ${j ? '' : 'disabled'}>↑</button><button class="btn small" data-down ${j < draft.commands.length - 1 ? '' : 'disabled'}>↓</button>
+        <button class="btn small danger" data-x>Remove</button></div><div class="cmd-form"></div></div>`).join('') || '<p class="dim">No commands yet.</p>';
+      $$('.sub', box).forEach((sub) => {
+        const j = +sub.dataset.j;
+        commandForm($('.cmd-form', sub), draft.commands[j]);
+        $('[data-x]', sub).onclick = () => { draft.commands.splice(j, 1); renderCmds(); };
+        $('[data-up]', sub).onclick = () => { [draft.commands[j - 1], draft.commands[j]] = [draft.commands[j], draft.commands[j - 1]]; renderCmds(); };
+        $('[data-down]', sub).onclick = () => { [draft.commands[j + 1], draft.commands[j]] = [draft.commands[j], draft.commands[j + 1]]; renderCmds(); };
+      });
+    };
+
     const render = () => {
       el.innerHTML = `
-        <div class="card"><h3>Location (for dusk and sunset times)</h3>
-          <div class="row"><label>Latitude <input id="lat" value="${esc(CONFIG.location.latitude ?? '')}" placeholder="e.g. 36.1"></label>
-          <label>Longitude <input id="lon" value="${esc(CONFIG.location.longitude ?? '')}" placeholder="e.g. -94.1"></label>
-          <button class="btn" id="saveLoc">Save location</button>
-          <span class="muted">${sun.sunset ? `Today: sunset ${new Date(sun.sunset).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}, dusk ${new Date(sun.dusk).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'Set a location to use dusk/sunset.'}</span></div></div>
-        <div class="card"><div class="row"><h3 style="margin:0">Schedule</h3><span class="spacer"></span><button class="btn" id="addSch">Add entry</button><button class="btn primary" id="saveSch">Save</button></div>
-          <p class="dim">Entries higher in the list win when they overlap. An end time before the start runs past midnight.</p>
-          <div class="table-wrap"><table><thead><tr><th>On</th><th>What</th><th>Days</th><th>Start</th><th>End</th><th>Dates</th><th></th></tr></thead><tbody>
-          ${entries.map((e, i) => `<tr data-i="${i}">
-            <td><input type="checkbox" data-f="enabled" ${e.enabled ? 'checked' : ''}></td>
-            <td><select data-f="type"><option value="playlist" ${e.type === 'playlist' ? 'selected' : ''}>Playlist</option><option value="command" ${e.type === 'command' ? 'selected' : ''}>Command</option></select>
-              ${e.type === 'command' ? `<input data-f="command" value="${esc(e.command)}" placeholder="FPP command">` : `<select data-f="playlist">${LIB.playlists.map((n) => `<option ${n === e.playlist ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>
-              <label class="inline"><input type="checkbox" data-f="repeat" ${e.repeat ? 'checked' : ''}> repeat</label>`}</td>
-            <td>${DAYS.map((d, k) => `<label class="inline" style="display:inline-flex;gap:3px"><input type="checkbox" data-day="${k}" ${e.days.includes(k) ? 'checked' : ''}>${d}</label>`).join(' ')}</td>
-            <td>${timeField(e.startTime, 'startTime')} <input type="number" data-f="startOffset" value="${e.startOffset}" title="offset minutes" style="width:70px"></td>
-            <td>${e.type === 'command' ? '<span class="dim">—</span>' : `${timeField(e.endTime, 'endTime')} <input type="number" data-f="endOffset" value="${e.endOffset}" title="offset minutes" style="width:70px">
-              <select data-f="stopType"><option value="graceful" ${e.stopType === 'graceful' ? 'selected' : ''}>finish song</option><option value="hard" ${e.stopType === 'hard' ? 'selected' : ''}>stop now</option></select>`}</td>
-            <td><input type="date" data-f="startDate" value="${esc(e.startDate)}"> <input type="date" data-f="endDate" value="${esc(e.endDate)}"></td>
-            <td><button class="btn small" data-mv="-1">↑</button><button class="btn small" data-mv="1">↓</button><button class="btn small danger" data-rm>✕</button></td>
-          </tr>`).join('') || '<tr><td colspan="7" class="dim">No entries.</td></tr>'}
-          </tbody></table></div></div>
-        <div class="card"><h3>Next 7 days</h3>${upcoming.length ? `<table><tbody>${upcoming.map((u) => `<tr><td>${new Date(u.start).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</td><td>${u.type === 'command' ? `run ${esc(u.command)}` : `${esc(u.playlist)} until ${new Date(u.end).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`}</td></tr>`).join('')}</tbody></table>` : '<p class="dim">Nothing scheduled.</p>'}</div>`;
-      $('#saveLoc').onclick = guard(async () => { await saveConfig({ location: { latitude: $('#lat').value === '' ? null : +$('#lat').value, longitude: $('#lon').value === '' ? null : +$('#lon').value } }); PAGES.schedule(el); });
-      $('#addSch').onclick = () => { entries.push({ enabled: true, type: 'playlist', playlist: LIB.playlists[0] || '', repeat: true, days: [0, 1, 2, 3, 4, 5, 6], startTime: 'dusk', startOffset: 0, endTime: '22:00', endOffset: 0, stopType: 'graceful', startDate: '', endDate: '', args: [] }); render(); };
-      $$('tr[data-i]', el).forEach((tr) => {
-        const e = entries[+tr.dataset.i];
-        $$('[data-f]', tr).forEach((inp) => inp.addEventListener('change', () => {
-          const f = inp.dataset.f;
-          if (f.endsWith('Kind')) { const k = f.slice(0, -4); e[k] = inp.value === 'time' ? '17:00' : inp.value; render(); return; }
-          if (inp.type === 'checkbox') e[f] = inp.checked;
-          else if (inp.type === 'number') e[f] = +inp.value;
-          else e[f] = inp.value;
-          if (f === 'type') render();
-        }));
-        $$('[data-day]', tr).forEach((cb) => cb.addEventListener('change', () => { e.days = $$('[data-day]', tr).filter((c) => c.checked).map((c) => +c.dataset.day); }));
-        $('[data-rm]', tr).onclick = () => { entries.splice(+tr.dataset.i, 1); render(); };
-        $$('[data-mv]', tr).forEach((b) => (b.onclick = () => { const i = +tr.dataset.i, j = i + +b.dataset.mv; if (j < 0 || j >= entries.length) return; [entries[i], entries[j]] = [entries[j], entries[i]]; render(); }));
+        <div class="card"><h3>Run a command now</h3><div id="quick" class="cmd-form"></div>
+          <div class="row end" style="margin-top:10px"><span class="muted" id="quickOut"></span><span class="spacer"></span><button class="btn primary" id="quickRun">Run</button></div></div>
+        <div class="card"><div class="row"><h3 style="margin:0">Command presets</h3><span class="spacer"></span><button class="btn primary" id="newP" ${editing !== null ? 'disabled' : ''}>New preset</button></div>
+          <p class="dim">A preset is a named list of commands. Run it from here, from the schedule, a playlist, a plugin or xLights with "Trigger Command Preset". The file is FPP's <code>commandPresets.json</code>, so FPP presets restore as-is.</p>
+          <div class="items">${editing === 'new' ? editorView() : ''}${presets.map((p, i) => (editing === i ? editorView() : presetView(p, i))).join('') || (editing === null ? '<p class="dim">No presets yet.</p>' : '')}</div></div>`;
+      commandForm($('#quick'), quick);
+      $('#quickRun').onclick = guard(async () => {
+        if (!quick.command) throw new Error('choose a command');
+        const r = await api('POST', P('/command'), quick);
+        $('#quickOut').textContent = String(r.result).slice(0, 200);
       });
-      $('#saveSch').onclick = guard(async () => { ({ entries, upcoming } = await api('PUT', P('/schedule'), { entries })); toast('Schedule saved'); render(); });
+      $('#newP').onclick = () => { editing = 'new'; draft = { name: '', presetSlot: 0, commands: [{ command: '', args: [] }] }; render(); };
+      $$('.item[data-i]', el).forEach((row) => {
+        const i = +row.dataset.i;
+        $('[data-run]', row).onclick = guard(async () => { const r = await api('POST', P('/presets/run'), { name: presets[i].name }); toast(`${presets[i].name}: ${r.result}`); });
+        $('[data-edit]', row).onclick = () => { editing = i; draft = clone(presets[i]); render(); };
+        $('[data-del]', row).onclick = guard(async () => { if (!confirm(`Delete the preset "${presets[i].name}"?`)) return; presets.splice(i, 1); await savePresets(); toast('Preset deleted'); render(); });
+      });
+      if (editing !== null) {
+        renderCmds();
+        $('#pAdd').onclick = () => { draft.commands.push({ command: '', args: [] }); renderCmds(); };
+        $('#pCancel').onclick = () => { editing = null; render(); };
+        $('#pSave').onclick = guard(async () => {
+          draft.name = $('#pName').value.trim();
+          draft.presetSlot = parseInt($('#pSlot').value, 10) || 0;
+          draft.commands = draft.commands.filter((c) => c.command);
+          if (!draft.name) throw new Error('give the preset a name');
+          if (!draft.commands.length) throw new Error('add at least one command');
+          const prev = presets.slice();
+          if (editing === 'new') presets.push(draft); else presets[editing] = draft;
+          try { await savePresets(); } catch (e) { presets = prev; throw e; }
+          editing = null; toast('Preset saved'); render();
+        });
+        $('#pName').focus();
+      }
     };
     render();
+  };
+
+  // ---------------------------------------------------------------- schedule
+  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const SUNS = { sunrise: 'Sunrise', sunset: 'Sunset', dawn: 'Dawn', dusk: 'Dusk' };
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const DAY_PRESETS = [['Every day', [0, 1, 2, 3, 4, 5, 6]], ['Weekdays', [1, 2, 3, 4, 5]], ['Weekends', [0, 6]], ['Fri & Sat', [5, 6]], ['Sun–Thu', [0, 1, 2, 3, 4]]];
+  const clock = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return new Date(2000, 0, 1, h, m).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
+  const hm = (d) => new Date(d).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const timeText = (spec, off) => {
+    if (SUNS[spec]) return `${SUNS[spec]}${off ? ` ${off > 0 ? '+' : '−'}${Math.abs(off)} min` : ''}`;
+    return clock(spec) + (off ? ` ${off > 0 ? '+' : '−'}${Math.abs(off)} min` : '');
+  };
+  const daysText = (days) => {
+    const k = [...days].sort().join();
+    const hit = DAY_PRESETS.find(([, d]) => d.join() === k);
+    return hit ? hit[0] : days.length ? days.map((d) => DAYS[d]).join(', ') : 'No days';
+  };
+
+  PAGES.schedule = async (el) => {
+    await Promise.all([loadConfig(), loadLib(), loadCmds()]);
+    let view = await api('GET', P('/schedule'));
+    const [sun, tzInfo] = await Promise.all([api('GET', P('/suntimes')).catch(() => ({})), api('GET', P('/timezone')).catch(() => ({ current: '' }))]);
+    let editing = null; // entry id, or 'new'
+    let draft = null;
+    let showLoc = false;
+    let allUpcoming = false;
+    const HOL = Object.fromEntries((view.holidays || []).map((h) => [h.shortName, h.name]));
+
+    const dateText = (spec, off) => {
+      if (!spec) return '';
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(spec);
+      if (m && m[1] === '0000') return `${MONTHS[+m[2] - 1]} ${+m[3]}`;
+      if (m) return new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+      return `${HOL[spec] || spec}${off ? ` ${off > 0 ? '+' : '−'}${Math.abs(off)} day${Math.abs(off) === 1 ? '' : 's'}` : ''}`;
+    };
+    const title = (e) => (e.type === 'command' ? cmdSummary(e) : e.type === 'sequence' ? e.sequence.replace(/\.fseq$/i, '') : e.playlist) || 'Nothing chosen';
+    const summary = (e) => {
+      const parts = [daysText(e.days)];
+      if (e.type === 'command') {
+        parts.push(e.repeatEvery ? `every ${e.repeatEvery} min from ${timeText(e.startTime, e.startOffset)} to ${timeText(e.endTime, e.endOffset)}` : `at ${timeText(e.startTime, e.startOffset)}`);
+      } else {
+        parts.push(`${timeText(e.startTime, e.startOffset)} – ${timeText(e.endTime, e.endOffset)}`);
+        parts.push(e.repeatEvery ? `plays once, again every ${e.repeatEvery} min` : e.repeat ? 'repeats' : 'plays once');
+        parts.push(e.stopType === 'hard' ? 'stops right at the end' : e.stopType === 'loop' ? 'then finishes the loop' : 'then finishes the song');
+      }
+      return parts.join(' · ');
+    };
+    const datesLine = (e) => {
+      if (!e.startDate && !e.endDate) return '';
+      if (e.startDate && e.endDate) return `${dateText(e.startDate, e.startDateOffset)} → ${dateText(e.endDate, e.endDateOffset)}`;
+      return e.startDate ? `From ${dateText(e.startDate, e.startDateOffset)}` : `Until ${dateText(e.endDate, e.endDateOffset)}`;
+    };
+    const whenNext = (e) => {
+      const n = view.next[e.id];
+      if (!e.enabled) return '<span class="pill">Off</span>';
+      if (!n) return '<span class="pill warn">Not in the next year</span>';
+      if (n.live) return '<span class="pill ok">On now</span>';
+      const d = new Date(n.start);
+      const today = new Date(); const tom = new Date(Date.now() + 86400000);
+      const day = d.toDateString() === today.toDateString() ? 'Today' : d.toDateString() === tom.toDateString() ? 'Tomorrow' : d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+      return `<span class="pill">Next: ${day} ${hm(d)}</span>`;
+    };
+    const ICON = { playlist: 'Playlist', sequence: 'Sequence', command: 'Command' };
+
+    const save = async (entries, msg) => { view = await api('PUT', P('/schedule'), { entries }); if (msg) toast(msg); };
+
+    // ---- editor pieces
+    const timePicker = (key) => {
+      const spec = draft[key + 'Time'], off = draft[key + 'Offset'];
+      const kind = SUNS[spec] ? spec : 'time';
+      return `<div class="timepick" data-tp="${key}">
+        <select data-kind>${[['time', 'Clock time'], ...Object.entries(SUNS)].map(([v, l]) => `<option value="${v}" ${v === kind ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <input type="time" data-clock value="${kind === 'time' ? esc(spec) : ''}" ${kind === 'time' ? '' : 'hidden'}>
+        <span class="off" ${kind === 'time' ? 'hidden' : ''}><select data-sign><option value="1" ${off >= 0 ? 'selected' : ''}>plus</option><option value="-1" ${off < 0 ? 'selected' : ''}>minus</option></select>
+          <input type="number" data-off min="0" max="720" value="${Math.abs(off) || 0}"> min</span>
+        ${kind !== 'time' && sun[kind] ? `<span class="dim" data-today>today ${hm(+new Date(sun[kind]) + off * 60000)}</span>` : ''}</div>`;
+    };
+    const datePicker = (key) => {
+      const spec = draft[key + 'Date'], off = draft[key + 'DateOffset'];
+      const kind = !spec ? 'none' : /^0000-/.test(spec) ? 'yearly' : /^\d{4}-/.test(spec) ? 'date' : 'holiday';
+      const mm = kind === 'yearly' ? +spec.slice(5, 7) : 12, dd = kind === 'yearly' ? +spec.slice(8, 10) : 1;
+      return `<div class="datepick" data-dp="${key}">
+        <select data-kind>${[['none', key === 'start' ? 'Any time' : 'No end'], ['date', 'A date'], ['yearly', 'Every year on'], ['holiday', 'A holiday']].map(([v, l]) => `<option value="${v}" ${v === kind ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        ${kind === 'date' ? `<input type="date" data-date value="${esc(spec)}">` : ''}
+        ${kind === 'yearly' ? `<select data-mon>${MONTHS.map((m, i) => `<option value="${i + 1}" ${i + 1 === mm ? 'selected' : ''}>${m}</option>`).join('')}</select><input type="number" data-day min="1" max="31" value="${dd}" style="width:70px">` : ''}
+        ${kind === 'holiday' ? `<select data-hol>${(view.holidays || []).map((h) => `<option value="${esc(h.shortName)}" ${h.shortName === spec ? 'selected' : ''}>${esc(h.name)}</option>`).join('')}</select>
+          <select data-sign><option value="1" ${off >= 0 ? 'selected' : ''}>plus</option><option value="-1" ${off < 0 ? 'selected' : ''}>minus</option></select><input type="number" data-off min="0" max="366" value="${Math.abs(off) || 0}" style="width:70px"> days` : ''}
+      </div>`;
+    };
+
+    const editorView = () => {
+      const e = draft;
+      const show = e.type !== 'command';
+      const repeatMode = e.repeatEvery ? 'every' : e.repeat ? 'repeat' : 'once';
+      return `<div class="sch-editor">
+        <div class="ed-sec"><div class="ed-label">What</div><div class="ed-body">
+          <div class="seg" data-seg="type">${['playlist', 'sequence', 'command'].map((t) => `<button type="button" data-v="${t}" class="${e.type === t ? 'on' : ''}">${ICON[t]}</button>`).join('')}</div>
+          ${e.type === 'playlist' ? `<select id="edPl"><option value="">Choose a playlist…</option>${LIB.playlists.map((n) => `<option ${n === e.playlist ? 'selected' : ''}>${esc(n)}</option>`).join('')}${e.playlist && !LIB.playlists.includes(e.playlist) ? `<option selected>${esc(e.playlist)}</option>` : ''}</select>` : ''}
+          ${e.type === 'sequence' ? `<select id="edSeq"><option value="">Choose a sequence…</option>${LIB.sequences.map((s) => `<option value="${esc(s.name)}" ${s.name === e.sequence ? 'selected' : ''}>${esc(s.name.replace(/\.fseq$/i, ''))}</option>`).join('')}${e.sequence && !LIB.sequences.some((s) => s.name === e.sequence) ? `<option selected>${esc(e.sequence)}</option>` : ''}</select>
+            <p class="dim">Plays with the audio named in the sequence, if that file is on the player.</p>` : ''}
+          ${e.type === 'command' ? '<div id="edCmd" class="cmd-form"></div>' : ''}
+        </div></div>
+        <div class="ed-sec"><div class="ed-label">Days</div><div class="ed-body">
+          <div class="chips">${DAYS.map((d, k) => `<button type="button" class="chip ${e.days.includes(k) ? 'on' : ''}" data-day="${k}">${d}</button>`).join('')}</div>
+          <div class="row quick">${DAY_PRESETS.map(([l, d]) => `<button type="button" class="btn small" data-days="${d.join(',')}">${l}</button>`).join('')}</div>
+        </div></div>
+        <div class="ed-sec"><div class="ed-label">${show ? 'Time' : 'When'}</div><div class="ed-body">
+          <div class="tp-row"><span class="tp-lab">${show ? 'Starts' : 'At'}</span>${timePicker('start')}</div>
+          ${!show ? `<label class="inline"><input type="checkbox" id="edEvery" ${e.repeatEvery ? 'checked' : ''}> Run again every <input type="number" id="edEveryN" min="1" max="1440" value="${e.repeatEvery || 30}" style="width:80px"> minutes</label>` : ''}
+          ${show || e.repeatEvery ? `<div class="tp-row"><span class="tp-lab">${show ? 'Ends' : 'Until'}</span>${timePicker('end')}</div>` : ''}
+          ${show ? '<p class="dim">An end time earlier than the start runs past midnight.</p>' : ''}
+        </div></div>
+        ${show ? `<div class="ed-sec"><div class="ed-label">Playback</div><div class="ed-body">
+          <label>While on <select id="edRepeat">
+            <option value="repeat" ${repeatMode === 'repeat' ? 'selected' : ''}>Repeat until the end time</option>
+            <option value="once" ${repeatMode === 'once' ? 'selected' : ''}>Play once</option>
+            <option value="every" ${repeatMode === 'every' ? 'selected' : ''}>Play once, then again every…</option></select></label>
+          ${repeatMode === 'every' ? `<label class="inline"><input type="number" id="edEveryN" min="1" max="1440" value="${e.repeatEvery || 30}" style="width:80px"> minutes</label>` : ''}
+          <div class="ed-sub">At the end time</div>
+          <div class="seg" data-seg="stopType">${[['graceful', 'Finish the song'], ['loop', 'Finish the loop'], ['hard', 'Stop right away']].map(([v, l]) => `<button type="button" data-v="${v}" class="${e.stopType === v ? 'on' : ''}">${l}</button>`).join('')}</div>
+        </div></div>` : ''}
+        <div class="ed-sec"><div class="ed-label">Dates</div><div class="ed-body">
+          <div class="tp-row"><span class="tp-lab">From</span>${datePicker('start')}</div>
+          <div class="tp-row"><span class="tp-lab">Until</span>${datePicker('end')}</div>
+          <p class="dim">Holidays and "every year" dates repeat each season, e.g. Thanksgiving plus 1 day until every year on Jan 6.</p>
+        </div></div>
+        <div class="ed-foot"><span class="muted" id="edSummary">${esc(summary(e))}</span><span class="spacer"></span>
+          <label class="inline"><input type="checkbox" id="edOn" ${e.enabled ? 'checked' : ''}> Enabled</label>
+          <button class="btn" id="edCancel">Cancel</button><button class="btn primary" id="edSave">Save</button></div>
+      </div>`;
+    };
+
+    const wireEditor = () => {
+      const box = $('.sch-editor', el);
+      const upd = () => { $('#edSummary').textContent = summary(draft); };
+      $$('[data-seg]', box).forEach((seg) => $$('button', seg).forEach((b) => (b.onclick = () => {
+        draft[seg.dataset.seg] = b.dataset.v;
+        if (seg.dataset.seg === 'type') { draft.repeatEvery = 0; render(); } else { $$('button', seg).forEach((x) => x.classList.toggle('on', x === b)); upd(); }
+      })));
+      if ($('#edPl')) $('#edPl').onchange = (ev) => { draft.playlist = ev.target.value; upd(); };
+      if ($('#edSeq')) $('#edSeq').onchange = (ev) => { draft.sequence = ev.target.value; upd(); };
+      if ($('#edCmd')) commandForm($('#edCmd'), draft, upd);
+      $$('[data-day]', box).forEach((b) => (b.onclick = () => {
+        const k = +b.dataset.day;
+        draft.days = draft.days.includes(k) ? draft.days.filter((d) => d !== k) : [...draft.days, k].sort();
+        b.classList.toggle('on'); upd();
+      }));
+      $$('[data-days]', box).forEach((b) => (b.onclick = () => { draft.days = b.dataset.days.split(',').map(Number); $$('[data-day]', box).forEach((c) => c.classList.toggle('on', draft.days.includes(+c.dataset.day))); upd(); }));
+      $$('[data-tp]', box).forEach((tp) => {
+        const key = tp.dataset.tp;
+        $('[data-kind]', tp).onchange = (ev) => {
+          const v = ev.target.value;
+          draft[key + 'Time'] = v === 'time' ? (key === 'start' ? '17:00' : '22:00') : v;
+          if (v === 'time') draft[key + 'Offset'] = 0;
+          render();
+        };
+        $('[data-clock]', tp).oninput = (ev) => { if (ev.target.value) { draft[key + 'Time'] = ev.target.value; upd(); } };
+        const off = () => { draft[key + 'Offset'] = (+$('[data-sign]', tp).value) * (Math.abs(parseInt($('[data-off]', tp).value, 10)) || 0); upd(); };
+        $('[data-sign]', tp).onchange = off; $('[data-off]', tp).oninput = off;
+      });
+      $$('[data-dp]', box).forEach((dp) => {
+        const key = dp.dataset.dp;
+        $('[data-kind]', dp).onchange = (ev) => {
+          const v = ev.target.value;
+          const y = new Date().getFullYear();
+          draft[key + 'Date'] = v === 'none' ? '' : v === 'date' ? `${y}-12-01` : v === 'yearly' ? (key === 'start' ? '0000-11-25' : '0000-01-06') : (key === 'start' ? 'Thanksgiving' : 'NewYearsDay');
+          draft[key + 'DateOffset'] = 0;
+          render();
+        };
+        const set = () => {
+          if ($('[data-date]', dp)) draft[key + 'Date'] = $('[data-date]', dp).value;
+          if ($('[data-mon]', dp)) draft[key + 'Date'] = `0000-${String($('[data-mon]', dp).value).padStart(2, '0')}-${String(Math.min(31, Math.max(1, +$('[data-day]', dp).value || 1))).padStart(2, '0')}`;
+          if ($('[data-hol]', dp)) { draft[key + 'Date'] = $('[data-hol]', dp).value; draft[key + 'DateOffset'] = (+$('[data-sign]', dp).value) * (Math.abs(parseInt($('[data-off]', dp).value, 10)) || 0); }
+          upd();
+        };
+        $$('input, select:not([data-kind])', dp).forEach((i) => i.addEventListener('input', set));
+        $$('select:not([data-kind])', dp).forEach((i) => i.addEventListener('change', set));
+      });
+      if ($('#edRepeat')) $('#edRepeat').onchange = (ev) => { const v = ev.target.value; draft.repeat = v === 'repeat'; draft.repeatEvery = v === 'every' ? (draft.repeatEvery || 30) : 0; render(); };
+      if ($('#edEvery')) $('#edEvery').onchange = (ev) => { draft.repeatEvery = ev.target.checked ? (+$('#edEveryN').value || 30) : 0; render(); };
+      if ($('#edEveryN')) $('#edEveryN').oninput = (ev) => { if (draft.type !== 'command' || $('#edEvery').checked) { draft.repeatEvery = Math.max(1, +ev.target.value || 1); upd(); } };
+      $('#edOn').onchange = (ev) => { draft.enabled = ev.target.checked; };
+      $('#edCancel').onclick = () => { editing = null; render(); };
+      $('#edSave').onclick = guard(async () => {
+        if (draft.type === 'playlist' && !draft.playlist) throw new Error('choose a playlist');
+        if (draft.type === 'sequence' && !draft.sequence) throw new Error('choose a sequence');
+        if (draft.type === 'command' && !draft.command) throw new Error('choose a command');
+        if (!draft.days.length) throw new Error('pick at least one day');
+        const list = view.entries.slice();
+        if (editing === 'new') list.push(draft); else list[list.findIndex((x) => x.id === editing)] = draft;
+        await save(list, 'Schedule saved');
+        editing = null; render();
+      });
+      box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    };
+
+    const entryView = (e, i) => `
+      <div class="sch ${e.enabled ? '' : 'off'}" data-id="${esc(e.id)}">
+        <label class="switch" title="${e.enabled ? 'On' : 'Off'}"><input type="checkbox" data-toggle ${e.enabled ? 'checked' : ''}><span></span></label>
+        <div class="sch-main">
+          <div class="sch-title"><span class="tag tag-${e.type}">${ICON[e.type]}</span> ${esc(title(e))}</div>
+          <div class="sch-sum">${esc(summary(e))}</div>
+          ${datesLine(e) ? `<div class="sch-dates dim">${esc(datesLine(e))}</div>` : ''}
+        </div>
+        <div class="sch-side">${whenNext(e)}
+          <div class="sch-btns"><button class="btn small" data-mv="-1" ${i ? '' : 'disabled'} aria-label="Move up">↑</button><button class="btn small" data-mv="1" ${i < view.entries.length - 1 ? '' : 'disabled'} aria-label="Move down">↓</button>
+          <button class="btn small" data-dup>Copy</button><button class="btn small" data-edit>Edit</button><button class="btn small danger" data-del>Delete</button></div></div>
+      </div>`;
+
+    const upcomingView = () => {
+      if (!view.upcoming.length) return '<p class="dim">Nothing scheduled in the next 7 days.</p>';
+      const groups = new Map();
+      const today = new Date().toDateString(), tom = new Date(Date.now() + 86400000).toDateString();
+      const LIMIT = 12;
+      const list = allUpcoming ? view.upcoming : view.upcoming.slice(0, LIMIT);
+      for (const u of list) {
+        const d = new Date(u.start);
+        const k = d.toDateString();
+        const label = (k === today ? 'Today · ' : k === tom ? 'Tomorrow · ' : '') + d.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
+        if (!groups.has(k)) groups.set(k, { label, items: [] });
+        groups.get(k).items.push(u);
+      }
+      return [...groups.values()].map((g) => `<div class="up-day">${esc(g.label)}</div>${g.items.map((u) => `
+        <div class="up-row"><span class="up-time">${hm(u.start)}${u.end ? ` – ${hm(u.end)}` : ''}</span>
+        <span class="tag tag-${u.type}">${ICON[u.type]}</span><span class="up-what">${esc(u.type === 'command' ? cmdSummary({ command: u.name, args: u.args }) : u.name.replace(/\.fseq$/i, ''))}${u.repeatEvery ? ` <span class="dim">every ${u.repeatEvery} min</span>` : ''}</span>
+        ${u.live ? '<span class="pill ok">On now</span>' : ''}</div>`).join('')}`).join('')
+        + (view.upcoming.length > LIMIT ? `<button class="btn small" id="moreUp" style="margin-top:10px">${allUpcoming ? 'Show less' : `Show all ${view.upcoming.length}`}</button>` : '');
+    };
+
+    const render = () => {
+      const loc = CONFIG.location || {};
+      const hasLoc = loc.latitude !== null && loc.latitude !== undefined && loc.longitude !== null && loc.longitude !== undefined;
+      el.innerHTML = `
+        ${CONFIG.mode === 'remote' ? '<div class="card notice">This player is in remote mode, so the schedule does not run. Switch to player mode on the MultiSync page.</div>' : ''}
+        <div class="card sch-info"><div class="row">
+          <div class="info-bits">
+            ${sun.sunset ? `<span><span class="dim">Sunset</span> ${hm(sun.sunset)}</span><span><span class="dim">Dusk</span> ${hm(sun.dusk)}</span><span><span class="dim">Sunrise</span> ${hm(sun.sunrise)}</span>` : '<span class="pill warn">Set your location to use sunset and dusk times</span>'}
+            <span><span class="dim">Timezone</span> ${esc(tzInfo.current || '')}</span>
+          </div><span class="spacer"></span><button class="btn small" id="locBtn">${hasLoc ? 'Location' : 'Set location'}</button></div>
+          <div id="locForm" ${showLoc ? '' : 'hidden'} style="margin-top:12px"><div class="row">
+            <label>Latitude <input id="lat" value="${esc(loc.latitude ?? '')}" placeholder="e.g. 36.1"></label>
+            <label>Longitude <input id="lon" value="${esc(loc.longitude ?? '')}" placeholder="e.g. -94.1"></label>
+            <button class="btn" id="geo" type="button">Use this device's location</button><button class="btn primary" id="saveLoc">Save</button></div>
+            <p class="dim">Change the timezone on the System page.</p></div></div>
+        <div class="grid sch-grid">
+          <div class="card"><div class="row"><h3 style="margin:0">Schedule</h3><span class="spacer"></span>
+            <button class="btn" id="addCmd" ${editing ? 'disabled' : ''}>Add command</button><button class="btn primary" id="addShow" ${editing ? 'disabled' : ''}>Add show</button></div>
+            <p class="dim">When two entries overlap, the higher one wins.</p>
+            <div class="sch-list">${editing === 'new' ? editorView() : ''}${view.entries.map((e, i) => (editing === e.id ? editorView() : entryView(e, i))).join('')}
+            ${!view.entries.length && editing !== 'new' ? '<div class="empty"><p>Nothing scheduled yet.</p><p class="dim">Add a show to start a playlist at dusk, or a command to run at a set time.</p></div>' : ''}</div></div>
+          <div class="card"><h3>Coming up</h3>${upcomingView()}</div>
+        </div>`;
+
+      $('#locBtn').onclick = () => { showLoc = !showLoc; $('#locForm').hidden = !showLoc; };
+      if ($('#moreUp')) $('#moreUp').onclick = () => { allUpcoming = !allUpcoming; render(); };
+      $('#geo').onclick = () => {
+        if (!navigator.geolocation) return toast('This browser cannot share its location', true);
+        navigator.geolocation.getCurrentPosition((p) => { $('#lat').value = p.coords.latitude.toFixed(4); $('#lon').value = p.coords.longitude.toFixed(4); }, (e) => toast(e.message, true));
+      };
+      $('#saveLoc').onclick = guard(async () => { await saveConfig({ location: { latitude: $('#lat').value === '' ? null : +$('#lat').value, longitude: $('#lon').value === '' ? null : +$('#lon').value } }); PAGES.schedule(el); });
+      const blank = (type) => ({ enabled: true, type, playlist: type === 'playlist' ? (LIB.playlists[0] || '') : '', sequence: '', repeat: true, repeatEvery: 0,
+        command: '', args: [], multisyncCommand: false, multisyncHosts: '', days: [0, 1, 2, 3, 4, 5, 6],
+        startTime: type === 'command' ? '23:00' : 'dusk', startOffset: 0, endTime: '22:00', endOffset: 0, stopType: 'graceful',
+        startDate: '', startDateOffset: 0, endDate: '', endDateOffset: 0 });
+      $('#addShow').onclick = () => { editing = 'new'; draft = blank('playlist'); render(); };
+      $('#addCmd').onclick = () => { editing = 'new'; draft = blank('command'); render(); };
+      $$('.sch[data-id]', el).forEach((row) => {
+        const id = row.dataset.id;
+        const i = view.entries.findIndex((x) => x.id === id);
+        const e = view.entries[i];
+        $('[data-toggle]', row).onchange = guard(async (ev) => { const list = clone(view.entries); list[i].enabled = ev.target.checked; await save(list, ev.target.checked ? 'Entry on' : 'Entry off'); render(); });
+        $('[data-edit]', row).onclick = () => { editing = id; draft = clone(e); render(); };
+        $('[data-dup]', row).onclick = () => { editing = 'new'; draft = { ...clone(e), id: undefined }; render(); };
+        $('[data-del]', row).onclick = guard(async () => { if (!confirm(`Delete "${title(e)}" from the schedule?`)) return; const list = view.entries.filter((x) => x.id !== id); await save(list, 'Entry deleted'); render(); });
+        $$('[data-mv]', row).forEach((b) => (b.onclick = guard(async () => {
+          const j = i + +b.dataset.mv; if (j < 0 || j >= view.entries.length) return;
+          const list = view.entries.slice(); [list[i], list[j]] = [list[j], list[i]]; await save(list); render();
+        })));
+      });
+      if (editing) wireEditor();
+    };
+    render();
+    pageTimer = setInterval(async () => { if (editing) return; try { view = await api('GET', P('/schedule')); render(); } catch {} }, 30000);
   };
 
   // ---------------------------------------------------------------- outputs
@@ -599,6 +1018,82 @@
     });
   };
 
+  // ---------------------------------------------------------------- FPP backup restore
+  function wireRestore() {
+    let backup = null;
+    let info = null;
+    const body = $('#bkBody');
+    const render = () => {
+      if (!info) { body.innerHTML = ''; return; }
+      const m = info.meta;
+      body.innerHTML = `
+        <div class="bk-meta">${m.hostName ? `From <b>${esc(m.hostName)}</b>` : 'FPP backup'}${m.platform ? ` · ${esc(m.platform)}` : ''}${m.taken ? ` · taken ${new Date(m.taken).toLocaleString()}` : ''}</div>
+        ${info.warnings.map((w) => `<p class="warn-text">${esc(w)}</p>`).join('')}
+        <div class="row bk-bulk"><button class="btn small" id="bkAll">Select everything</button><button class="btn small" id="bkNone">Select nothing</button></div>
+        ${info.sections.map((sec) => `
+          <div class="bk-sec" data-sec="${esc(sec.id)}">
+            <label class="inline bk-head"><input type="checkbox" data-secall> <b>${esc(sec.label)}</b> <span class="dim" data-count></span></label>
+            ${sec.note ? `<p class="dim bk-note">${esc(sec.note)}</p>` : ''}
+            ${sec.id === 'schedule' ? `<div class="seg bk-mode" data-mode><button type="button" data-v="replace" class="on">Replace my schedule</button><button type="button" data-v="append">Add to my schedule</button></div>` : ''}
+            <div class="bk-items">${sec.items.map((it) => `
+              <label class="bk-item ${it.disabled ? 'disabled' : ''}"><input type="checkbox" data-item="${esc(it.id)}" ${it.checked && !it.disabled ? 'checked' : ''} ${it.disabled ? 'disabled' : ''}>
+                <span><span class="bk-label">${esc(it.label)}</span>${it.detail ? ` <span class="dim">— ${esc(it.detail)}</span>` : ''}
+                ${(it.warnings || []).map((w) => `<span class="warn-text">${esc(w)}</span>`).join('')}</span></label>`).join('')}</div>
+          </div>`).join('')}
+        ${info.skipped.length ? `<div class="bk-skip"><b>Not restored</b><ul>${info.skipped.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+        <div class="row end"><span class="muted" id="bkSel"></span><span class="spacer"></span><button class="btn" id="bkCancel">Cancel</button><button class="btn primary" id="bkGo">Restore selected</button></div>
+        <div id="bkResult"></div>`;
+      const count = () => {
+        let total = 0;
+        $$('.bk-sec', body).forEach((sec) => {
+          const boxes = $$('[data-item]:not(:disabled)', sec);
+          const on = boxes.filter((b) => b.checked).length;
+          total += on;
+          const all = $('[data-secall]', sec);
+          all.checked = on > 0 && on === boxes.length; all.indeterminate = on > 0 && on < boxes.length; all.disabled = !boxes.length;
+          $('[data-count]', sec).textContent = boxes.length > 1 ? `${on} of ${boxes.length}` : '';
+        });
+        $('#bkSel').textContent = `${total} item${total === 1 ? '' : 's'} selected`;
+        $('#bkGo').disabled = !total;
+      };
+      $$('.bk-sec', body).forEach((sec) => {
+        $('[data-secall]', sec).onchange = (e) => { $$('[data-item]:not(:disabled)', sec).forEach((b) => { b.checked = e.target.checked; }); count(); };
+        $$('[data-item]', sec).forEach((b) => (b.onchange = count));
+        const mode = $('[data-mode]', sec);
+        if (mode) $$('button', mode).forEach((b) => (b.onclick = () => $$('button', mode).forEach((x) => x.classList.toggle('on', x === b))));
+      });
+      $('#bkAll').onclick = () => { $$('[data-item]:not(:disabled)', body).forEach((b) => { b.checked = true; }); count(); };
+      $('#bkNone').onclick = () => { $$('[data-item]', body).forEach((b) => { b.checked = false; }); count(); };
+      $('#bkCancel').onclick = () => { backup = null; info = null; $('#bkFile').value = ''; $('#bkName').textContent = ''; render(); };
+      $('#bkGo').onclick = guard(async () => {
+        const selection = {};
+        $$('.bk-sec', body).forEach((sec) => { selection[sec.dataset.sec] = $$('[data-item]:checked', sec).map((b) => b.dataset.item); });
+        const mode = $('[data-mode] .on', body);
+        selection.scheduleMode = mode ? mode.dataset.v : 'replace';
+        if (selection.schedule && selection.schedule.length && selection.scheduleMode === 'replace' && !confirm('Replace your current schedule with the selected entries?')) return;
+        $('#bkGo').disabled = true;
+        try {
+          const r = await api('POST', P('/backup/restore'), { backup, selection });
+          $('#bkResult').innerHTML = `<div class="bk-done"><b>Restored:</b> ${esc(r.restored.join(', ') || 'nothing')}${r.problems.length ? `<br><span class="warn-text">${esc(r.problems.join('; '))}</span>` : ''}</div>`;
+          toast('Backup restored');
+          loadConfig().catch(() => {});
+        } finally { $('#bkGo').disabled = false; }
+      });
+      count();
+    };
+    $('#bkFile').onchange = guard(async (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      $('#bkName').textContent = f.name;
+      body.innerHTML = '<p class="muted">Reading…</p>';
+      try {
+        try { backup = JSON.parse(await f.text()); } catch { throw new Error('That file is not JSON. Choose the .json backup file FPP downloads.'); }
+        info = await api('POST', P('/backup/inspect'), { backup });
+        render();
+      } catch (err) { backup = null; info = null; body.innerHTML = `<p class="err">${esc(err.message)}</p>`; }
+    });
+  }
+
   // ---------------------------------------------------------------- system
   PAGES.system = async (el) => {
     await loadConfig();
@@ -622,6 +1117,10 @@
         <div class="card"><h3>Power</h3><div class="row"><button class="btn" data-sys="restart">Restart player</button><button class="btn" data-sys="reboot">Reboot</button><button class="btn danger" data-sys="shutdown">Shut down</button></div>
           <p class="dim">Restart applies audio device, display and matrix changes.</p></div>
       </div>
+      <div class="card" id="restoreCard"><h3>Restore from an FPP backup</h3>
+        <p class="muted">Bring over playlists, the schedule, command presets, scripts, controller outputs and settings from a Falcon Player backup. You pick what to restore; network settings and passwords are never touched.</p>
+        <div class="row"><label class="btn" for="bkFile" style="display:inline-flex">Choose backup file…</label><input type="file" id="bkFile" accept=".json,application/json" hidden><span class="dim" id="bkName">In FPP: Content Setup → File Manager → Backups, or Status/Control → Backups → Download.</span></div>
+        <div id="bkBody"></div></div>
       <div class="card"><div class="row"><h3 style="margin:0">Log</h3><span class="spacer"></span><button class="btn small" id="refLog">Refresh</button></div><pre class="logs mono" id="log"></pre></div>`;
     $('#saveSys').onclick = guard(async () => {
       if ($('#tz').value && $('#tz').value !== tz.current) await api('PUT', P('/timezone'), { timezone: $('#tz').value });
@@ -661,6 +1160,7 @@
       setTimeout(sysPoll, 1500);
     });
     sysPoll();
+    wireRestore();
     const loadLog = guard(async () => { const r = await api('GET', P('/logs?n=400')); $('#log').textContent = r.lines.join('\n'); $('#log').scrollTop = 1e9; });
     $('#refLog').onclick = loadLog;
     loadLog();

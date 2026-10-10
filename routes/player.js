@@ -13,6 +13,8 @@ const secrets = require('../lib/secrets');
 const log = require('../lib/log');
 const playlists = require('../lib/playlists');
 const scheduler = require('../lib/scheduler');
+const presetStore = require('../lib/presets');
+const tz = require('../lib/timezone');
 const updater = require('../lib/updater');
 const { probe } = require('../lib/fseq');
 const { ifaces } = require('../lib/multisync');
@@ -39,7 +41,9 @@ function cookieOf(req) {
 module.exports = function playerRoutes(ctx) {
   const { config, player, show, multisync, commands, plugins, showpilot } = ctx;
   const r = express.Router();
-  r.use(express.json({ limit: '4mb' }));
+  const smallJson = express.json({ limit: '4mb' });
+  const bigJson = express.json({ limit: '64mb' }); // FPP backups carry playlists and scripts
+  r.use((req, res, next) => (req.path.startsWith('/backup/') ? bigJson : smallJson)(req, res, next));
 
   // ------------------------------------------------------------ auth
   const needsAuth = () => !!secrets.getUiPasswordHash();
@@ -80,9 +84,9 @@ module.exports = function playerRoutes(ctx) {
     const info = show.info();
     return {
       version: pkg.version, hostName: config.get().hostName, mode: config.get().mode,
-      player: st, playlist: { name: info.name, index: info.index, size: info.size, breadcrumbs: info.breadcrumbs, paused: !!show.pausedSnapshot, stopping: show.gracefulStop },
+      player: st, playlist: { name: info.name, index: info.index, size: info.size, breadcrumbs: info.breadcrumbs, paused: !!show.pausedSnapshot, stopping: show.gracefulStop || show.stopAfterLoop },
       next: show.peekNext(),
-      schedule: { active: ctx.scheduler.active ? { playlist: ctx.scheduler.active.entry.playlist, end: ctx.scheduler.active.end } : null },
+      schedule: { active: ctx.scheduler.active ? { playlist: scheduler.targetName(ctx.scheduler.active.entry), end: ctx.scheduler.active.end } : null },
       showpilot: showpilot.status(),
       multisync: { sending: multisync.isSending(), lastMaster: multisync.stats.lastMaster, systems: multisync.systems.size },
       ips: ifaces().map((i) => i.address),
@@ -104,6 +108,7 @@ module.exports = function playerRoutes(ctx) {
     const b = req.body || {};
     if (b.playlist) { await show.start(b.playlist, { repeat: !!b.repeat, startItem: b.startItem }); return { ok: true }; }
     if (!b.sequence && !b.media) throw new Error('nothing to play');
+    if (b.sequence && !b.media) { await show.start(playlists.forSequence(String(b.sequence), !!b.repeat), { repeat: !!b.repeat }); return { ok: true }; }
     // One-off item: run it as a tiny playlist so the show runner manages it.
     const tmpName = '_now';
     playlists.save(tmpName, { mainPlaylist: [{ type: b.sequence && b.media ? 'both' : b.sequence ? 'sequence' : 'media', enabled: 1, sequenceName: b.sequence || undefined, mediaName: b.media || undefined }] });
@@ -125,8 +130,30 @@ module.exports = function playerRoutes(ctx) {
     if (!player.testPattern(pattern || null, Array.isArray(color) ? color.map(Number) : undefined)) throw new Error('stop the show before running a test pattern');
     return { ok: true };
   }));
-  r.post('/command', wrap(async (req) => ({ result: await commands.run(req.body.command, req.body.args || []) })));
+  r.post('/command', wrap(async (req) => {
+    const b = req.body || {};
+    if (b.multisyncCommand) multisync.sendCommand(String(b.command || ''), (b.args || []).map(String), String(b.multisyncHosts || ''));
+    return { result: await commands.run(b.command, b.args || []) };
+  }));
   r.get('/commands', wrap(() => commands.list()));
+
+  // ------------------------------------------------------------ command presets
+  r.get('/presets', wrap(() => ({ presets: presetStore.groups(), reserved: presetStore.RESERVED })));
+  r.put('/presets', wrap((req) => {
+    // Body: { presets: [{ name, presetSlot, commands: [{ command, args, multisyncCommand, multisyncHosts }] }] }
+    const rows = [];
+    const seen = new Set();
+    for (const g of (req.body && req.body.presets) || []) {
+      const name = String(g.name || '').trim();
+      if (!name) throw new Error('every preset needs a name');
+      if (seen.has(name)) throw new Error(`two presets are called "${name}"`);
+      seen.add(name);
+      for (const c of g.commands || []) rows.push({ ...c, name, presetSlot: g.presetSlot });
+    }
+    presetStore.save(rows);
+    return { presets: presetStore.groups(), reserved: presetStore.RESERVED };
+  }));
+  r.post('/presets/run', wrap(async (req) => ({ result: await ctx.presets.trigger(String((req.body || {}).name || '')) })));
 
   // ------------------------------------------------------------ library
   r.get('/library', wrap(() => {
@@ -145,12 +172,34 @@ module.exports = function playerRoutes(ctx) {
   }));
 
   // ------------------------------------------------------------ schedule
-  r.get('/schedule', wrap(() => ({ entries: scheduler.load(), upcoming: ctx.scheduler.upcoming(7) })));
-  r.put('/schedule', wrap((req) => ({ entries: scheduler.save(req.body.entries || []), upcoming: ctx.scheduler.upcoming(7) })));
+  const schedView = (entries) => ({ entries, upcoming: ctx.scheduler.upcoming(7), next: ctx.scheduler.nextRuns(),
+    holidays: require('../lib/holidays').list(), enabled: ctx.scheduler.enabled });
+  r.get('/schedule', wrap(() => schedView(scheduler.load())));
+  r.put('/schedule', wrap((req) => schedView(scheduler.save((req.body || {}).entries || []))));
   r.get('/suntimes', wrap(() => {
     const { sunTimes } = require('../lib/suntimes');
     const loc = config.get().location || {};
     return sunTimes(new Date(), loc.latitude, loc.longitude) || {};
+  }));
+
+  // ------------------------------------------------------------ FPP backup restore
+  const fppBackup = require('../lib/fpp-backup');
+  const backupEnv = () => {
+    const ls = (k) => { try { return fs.readdirSync(paths.dir(k)); } catch { return []; } };
+    return {
+      commandNames: new Set(commands.list().map((c) => c.name)),
+      audioCards: require('../lib/audio-devices').cards(),
+      plugins: plugins.list().map((p) => p.name),
+      library: { sequences: ls('sequences'), media: [...ls('music'), ...ls('videos')] },
+    };
+  };
+  r.post('/backup/inspect', wrap((req) => fppBackup.analyze((req.body || {}).backup, backupEnv())));
+  r.post('/backup/restore', wrap(async (req) => {
+    const b = req.body || {};
+    const env = backupEnv();
+    const res = await fppBackup.restore(b.backup, b.selection || {}, { config, audioCards: env.audioCards, setTimezone: (z) => tz.set(z) });
+    log.info('backup', `restored from an FPP backup: ${res.restored.join(', ') || 'nothing'}${res.problems.length ? ` (problems: ${res.problems.join('; ')})` : ''}`);
+    return res;
   }));
 
   // ------------------------------------------------------------ plugins
@@ -200,22 +249,12 @@ module.exports = function playerRoutes(ctx) {
     return { devices: list.map((c) => ({ id: c.id, name: `${c.name}${c.usb ? ' (USB)' : ''}` })), auto: audioDevices.resolve('auto', list).name };
   }));
   // Schedules run in local time, so the timezone matters.
-  r.get('/timezone', wrap(() => new Promise((resolve) => {
-    execFile('timedatectl', ['list-timezones'], { timeout: 10000 }, (err, out) => {
-      const current = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      resolve({ current, zones: err ? [current] : String(out).split('\n').filter(Boolean) });
-    });
-  })));
-  r.put('/timezone', wrap((req) => new Promise((resolve, reject) => {
-    const tz = String((req.body || {}).timezone || '');
-    if (!/^[A-Za-z0-9_+\-]+(\/[A-Za-z0-9_+\-]+)*$/.test(tz)) return reject(new Error('bad timezone'));
-    execFile('timedatectl', ['set-timezone', tz], { timeout: 10000 }, (err) => {
-      if (err) return reject(new Error('could not set the timezone: ' + err.message));
-      process.env.TZ = tz; // takes effect for new Date() in this process right away
-      log.info('system', `timezone set to ${tz}`);
-      resolve({ ok: true, timezone: tz });
-    });
-  })));
+  r.get('/timezone', wrap(async () => ({ current: tz.current(), zones: await tz.list() })));
+  r.put('/timezone', wrap(async (req) => {
+    const z = await tz.set((req.body || {}).timezone);
+    log.info('system', `timezone set to ${z}`);
+    return { ok: true, timezone: z };
+  }));
   r.post('/system/:action', wrap((req) => {
     const a = req.params.action;
     if (!['reboot', 'shutdown', 'restart'].includes(a)) throw new Error('unknown action');

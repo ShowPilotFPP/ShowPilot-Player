@@ -1,0 +1,236 @@
+{
+ "channelOutputs": {
+  "universes": [
+   {
+    "channelOutputs": [
+     {
+      "type": "universes",
+      "enabled": 1,
+      "startChannel": 1,
+      "channelCount": -1,
+      "universes": [
+       {
+        "active": 1,
+        "description": "Controller 1",
+        "id": 1,
+        "startChannel": 1,
+        "channelCount": 510,
+        "type": 1,
+        "universeCount": 4,
+        "address": "10.0.0.50",
+        "priority": 0
+       },
+       {
+        "active": 1,
+        "description": "Tree",
+        "id": 1,
+        "startChannel": 2041,
+        "channelCount": 3000,
+        "type": 4,
+        "universeCount": 1,
+        "address": "10.0.0.51"
+       },
+       {
+        "active": 1,
+        "description": "ArtNet",
+        "id": 9,
+        "startChannel": 5041,
+        "channelCount": 512,
+        "type": 3,
+        "universeCount": 1,
+        "address": "10.0.0.52"
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "pixel_strings": [
+   {
+    "channelOutputs": [
+     {
+      "type": "RPIWS281X",
+      "enabled": 1,
+      "outputs": []
+     }
+    ]
+   }
+  ],
+  "pwm": [
+   null
+  ]
+ },
+ "model-overlays": {
+  "models": [
+   {
+    "Name": "Matrix",
+    "StartChannel": 1,
+    "ChannelCount": 300
+   }
+  ]
+ },
+ "misc_configs": {
+  "configs": [
+   {
+    "user-holidays.json": [
+     {
+      "name": "Opening Night",
+      "shortName": "OpeningNight",
+      "month": 11,
+      "day": 28
+     }
+    ]
+   }
+  ]
+ },
+ "show_setup": {
+  "playlist": {
+   "Main Show.json": [
+    "{",
+    "    \"name\": \"Main Show\",",
+    "    \"repeat\": 1,",
+    "    \"loopCount\": 0,",
+    "    \"leadIn\": [],",
+    "    \"leadOut\": [],",
+    "    \"mainPlaylist\": [",
+    "        {",
+    "            \"type\": \"both\",",
+    "            \"enabled\": 1,",
+    "            \"sequenceName\": \"Song.fseq\",",
+    "            \"mediaName\": \"Song.mp3\",",
+    "            \"duration\": 180",
+    "        }",
+    "    ]",
+    "}"
+   ]
+  },
+  "schedule": [
+   [
+    "[",
+    "    {",
+    "        \"enabled\": 1,",
+    "        \"sequence\": 0,",
+    "        \"playlist\": \"Main Show\",",
+    "        \"day\": 7,",
+    "        \"startTime\": \"SunSet\",",
+    "        \"startTimeOffset\": 15,",
+    "        \"endTime\": \"22:00:00\",",
+    "        \"endTimeOffset\": 0,",
+    "        \"repeat\": 1,",
+    "        \"startDate\": \"Thanksgiving\",",
+    "        \"startDateOffset\": 1,",
+    "        \"endDate\": \"0000-01-06\",",
+    "        \"endDateOffset\": 0,",
+    "        \"stopType\": 2",
+    "    },",
+    "    {",
+    "        \"enabled\": 1,",
+    "        \"sequence\": 1,",
+    "        \"playlist\": \"Countdown.fseq\",",
+    "        \"day\": 66304,",
+    "        \"startTime\": \"19:00:00\",",
+    "        \"startTimeOffset\": 5,",
+    "        \"endTime\": \"21:00:00\",",
+    "        \"repeat\": 3000,",
+    "        \"startDate\": \"2019-01-01\",",
+    "        \"endDate\": \"2099-12-31\",",
+    "        \"stopType\": 1",
+    "    },",
+    "    {",
+    "        \"enabled\": 1,",
+    "        \"sequence\": 0,",
+    "        \"playlist\": \"\",",
+    "        \"day\": 14,",
+    "        \"startTime\": \"23:00:00\",",
+    "        \"endTime\": \"23:00:00\",",
+    "        \"repeat\": 0,",
+    "        \"command\": \"Trigger Command Preset\",",
+    "        \"args\": [",
+    "            \"Lights Off\"",
+    "        ],",
+    "        \"multisyncCommand\": true,",
+    "        \"multisyncHosts\": \"10.0.0.60\"",
+    "    }",
+    "]"
+   ]
+  ],
+  "scripts": {
+   "lights-on.sh": [
+    "#!/bin/sh",
+    "echo hi",
+    ""
+   ]
+  }
+ },
+ "settings": {
+  "system_settings": [
+   {
+    "HostName": "FPP",
+    "HostDescription": "Show Player",
+    "fppMode": "player",
+    "Latitude": "36.18",
+    "Longitude": "-94.13",
+    "TimeZone": "America/Chicago",
+    "MultiSyncEnabled": "1",
+    "MultiSyncRemotes": "10.0.0.60,10.0.0.61",
+    "AudioOutput": "Headphones",
+    "password": "secret"
+   }
+  ],
+  "commandPresets": [
+   {
+    "commands": [
+     {
+      "name": "Lights Off",
+      "presetSlot": 1,
+      "command": "All Lights Off",
+      "args": [],
+      "multisyncCommand": false
+     },
+     {
+      "name": "Lights Off",
+      "presetSlot": 1,
+      "command": "Stop Now",
+      "args": [],
+      "multisyncCommand": false
+     },
+     {
+      "name": "PLAYLIST_STOPPED",
+      "presetSlot": 0,
+      "command": "URL",
+      "args": [
+       "http://10.0.0.9/off",
+       "GET",
+       ""
+      ],
+      "multisyncCommand": false
+     }
+    ]
+   }
+  ],
+  "timezone": [
+   "America/Chicago"
+  ]
+ },
+ "plugins": {
+  "fpp-plugin-Example": {
+   "plugin.fpp-plugin-Example": [
+    [
+     "enabled = \"1\"",
+     ""
+    ]
+   ]
+  }
+ },
+ "network": {
+  "wired_network": [
+   [
+    "INTERFACE=\"eth0\"",
+    "ADDRESS=\"10.0.0.10\""
+   ]
+  ]
+ },
+ "fpp_backup_version": "8.0",
+ "backup_taken": 1791547200,
+ "platform": "Raspberry Pi"
+}
