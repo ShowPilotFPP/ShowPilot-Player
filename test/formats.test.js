@@ -170,25 +170,30 @@ test('sparse sequences: outputs whose channels the file lacks are reported', () 
   assert.deepEqual(uncoveredOutputs(outs, [[0, 175864]]), []);
 });
 
-test('large frames go out in paced bursts, in order, from their own copies', async () => {
-  const { OutputSet, BURST } = require('../lib/outputs');
-  const set = new OutputSet([{ type: 'ddp', ip: '127.0.0.1', startChannel: 1, channelCount: 1440 * 100 }]);
+test('large frames are spread over part of the frame time, interleaved, in order, from their own copies', async () => {
+  const { OutputSet } = require('../lib/outputs');
+  const set = new OutputSet([
+    { type: 'ddp', ip: '10.0.0.2', startChannel: 1, channelCount: 1440 * 120 },
+    { type: 'ddp', ip: '10.0.0.3', startChannel: 1440 * 120 + 1, channelCount: 1440 * 2 },
+  ]);
   const sent = [];
   const times = [];
-  set._raw = (p) => { sent.push(Buffer.from(p)); times.push(process.hrtime.bigint()); };
-  const frame = Buffer.alloc(1440 * 100, 1);
-  set.send(frame);
-  assert.equal(sent.length, BURST, 'only the first burst goes out at once');
+  set._raw = (p, port, ip) => { sent.push({ p: Buffer.from(p), ip }); times.push(process.hrtime.bigint()); };
+  const frame = Buffer.alloc(1440 * 122, 1);
+  set.send(frame, 50); // 20 fps: spread over 20 ms
+  assert.ok(sent.length <= 10, `first step sends only a few packets (${sent.length})`);
+  assert.deepEqual(sent.slice(0, 4).map((x) => x.ip), ['10.0.0.2', '10.0.0.3', '10.0.0.2', '10.0.0.3'], 'controllers interleaved');
   frame.fill(2); // the next frame's data must not leak into packets still queued
-  await new Promise((r) => setTimeout(r, 60));
-  assert.equal(sent.length, 100);
-  assert.ok(sent.every((p) => p[10] === 1), 'queued packets keep their own frame data');
-  assert.deepEqual(sent.map((p) => p.readUInt32BE(4)), Array.from({ length: 100 }, (_, i) => i * 1440));
-  assert.equal(sent[99][0], 0x41, 'PUSH stays on the last packet');
-  const gapMs = Number(times[BURST] - times[BURST - 1]) / 1e6;
-  assert.ok(gapMs >= 0.5, `bursts are spaced (${gapMs.toFixed(2)} ms)`);
+  await new Promise((r) => setTimeout(r, 80));
+  assert.equal(sent.length, 122);
+  assert.ok(sent.every((x) => x.p[10] === 1), 'queued packets keep their own frame data');
+  const big = sent.filter((x) => x.ip === '10.0.0.2');
+  assert.deepEqual(big.map((x) => x.p.readUInt32BE(4)), Array.from({ length: 120 }, (_, i) => i * 1440), 'in order per controller');
+  assert.equal(big[119].p[0], 0x41, 'PUSH stays on the last packet');
+  const spanMs = Number(times[times.length - 1] - times[0]) / 1e6;
+  assert.ok(spanMs >= 10 && spanMs < 45, `spread over ${spanMs.toFixed(1)} ms`);
   // A new frame before the queue drained: the old one is finished first.
-  set.send(frame); set.send(frame);
+  set.send(frame, 50); set.send(frame, 50);
   assert.equal(set.stats.flushedEarly, 1);
   set.close();
 });
