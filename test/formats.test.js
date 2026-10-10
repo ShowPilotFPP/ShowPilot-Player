@@ -170,30 +170,57 @@ test('sparse sequences: outputs whose channels the file lacks are reported', () 
   assert.deepEqual(uncoveredOutputs(outs, [[0, 175864]]), []);
 });
 
-test('large frames are spread over part of the frame time, interleaved, in order, from their own copies', async () => {
+test('a frame is handed to the sender as one batch: own copies, per-controller groups, sync last', () => {
   const { OutputSet } = require('../lib/outputs');
+  const batches = [];
   const set = new OutputSet([
     { type: 'ddp', ip: '10.0.0.2', startChannel: 1, channelCount: 1440 * 120 },
     { type: 'ddp', ip: '10.0.0.3', startChannel: 1440 * 120 + 1, channelCount: 1440 * 2 },
-  ]);
-  const sent = [];
-  const times = [];
-  set._raw = (p, port, ip) => { sent.push({ p: Buffer.from(p), ip }); times.push(process.hrtime.bigint()); };
-  const frame = Buffer.alloc(1440 * 122, 1);
-  set.send(frame, 50); // 20 fps: spread over 20 ms
-  assert.ok(sent.length <= 10, `first step sends only a few packets (${sent.length})`);
-  assert.deepEqual(sent.slice(0, 4).map((x) => x.ip), ['10.0.0.2', '10.0.0.3', '10.0.0.2', '10.0.0.3'], 'controllers interleaved');
-  frame.fill(2); // the next frame's data must not leak into packets still queued
-  await new Promise((r) => setTimeout(r, 80));
-  assert.equal(sent.length, 122);
-  assert.ok(sent.every((x) => x.p[10] === 1), 'queued packets keep their own frame data');
-  const big = sent.filter((x) => x.ip === '10.0.0.2');
+    { type: 'e131', multicast: false, ip: '10.0.0.4', universe: 1, universeCount: 2, universeSize: 512, startChannel: 1440 * 122 + 1, syncUniverse: 9 },
+  ], { transport: (b) => batches.push(b) });
+  const frame = Buffer.alloc(1440 * 122 + 1024, 1);
+  set.send(frame, 50);
+  frame.fill(2); // the next frame's data must not leak into the batch
+  const b = batches[0];
+  assert.equal(b.mbps, 90);
+  assert.equal(b.stepMs, 50);
+  assert.equal(b.groups, 3);
+  const data = Buffer.from(b.data);
+  const pk = [];
+  for (let i = 0; i < b.meta.length / 4; i++) pk.push({ p: data.subarray(b.meta[i * 4], b.meta[i * 4] + b.meta[i * 4 + 1]), dest: b.dests[b.meta[i * 4 + 2]], g: b.meta[i * 4 + 3] });
+  assert.equal(pk.length, 120 + 2 + 2 + 1);
+  const big = pk.filter((x) => x.g === 0);
+  assert.ok(big.every((x) => x.dest === '10.0.0.2:4048' && x.p[10] === 1), 'own copy of the frame data');
   assert.deepEqual(big.map((x) => x.p.readUInt32BE(4)), Array.from({ length: 120 }, (_, i) => i * 1440), 'in order per controller');
   assert.equal(big[119].p[0], 0x41, 'PUSH stays on the last packet');
+  assert.equal(pk[pk.length - 1].g, -1, 'E1.31 sync goes after everything');
+  set.configure([], { pacingMbps: 0 });
+  assert.equal(set.mbps, 0);
+});
+
+test('sender thread paces each controller like FPP (90 Mbit/s) and finishes within the frame', async () => {
+  const dgram = require('dgram');
+  const { OutputSet } = require('../lib/outputs');
+  const rx = dgram.createSocket('udp4');
+  await new Promise((r) => rx.bind(0, '127.0.0.1', r));
+  const port = rx.address().port;
+  const times = [];
+  rx.on('message', () => times.push(process.hrtime.bigint()));
+  const set = new OutputSet([{ type: 'ddp', ip: '127.0.0.1', startChannel: 1, channelCount: 1440 * 60 }]);
+  set.outputs[0].send = function (sock, frame) { // same packets, test port
+    for (let i = 0; i < this.packets.length; i++) sock.send(this.packets[i], port, '127.0.0.1');
+  };
+  const frame = Buffer.alloc(1440 * 60, 3);
+  set.send(frame, 50);              // first frame: sockets still connecting
+  await new Promise((r) => setTimeout(r, 120));
+  times.length = 0;
+  set.send(frame, 50);              // 60 x 1450 bytes at 90 Mbit/s ≈ 7.7 ms
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(times.length, 60);
   const spanMs = Number(times[times.length - 1] - times[0]) / 1e6;
-  assert.ok(spanMs >= 10 && spanMs < 45, `spread over ${spanMs.toFixed(1)} ms`);
-  // A new frame before the queue drained: the old one is finished first.
-  set.send(frame, 50); set.send(frame, 50);
-  assert.equal(set.stats.flushedEarly, 1);
+  assert.ok(spanMs >= 5 && spanMs < 40, `paced over ${spanMs.toFixed(1)} ms`);
+  const st = set.pollStats();
+  assert.equal(st.droppedFrames, 0);
   set.close();
+  rx.close();
 });

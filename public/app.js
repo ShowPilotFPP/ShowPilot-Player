@@ -184,6 +184,8 @@
     if (t) t.innerHTML = [
       ['Clock', p.clock], ['Frames/s', w.fps ?? 0], ['Avg late', `${w.avgLateMs ?? 0} ms`], ['Max late (1 s)', `${w.maxLateMs ?? 0} ms`],
       ['Late >20 ms (song)', w.total ? `${w.total.over20} of ${w.total.frames}` : '0'], ['Block decode', `${w.maxDecodeMs ?? 0} ms`],
+      ['Output send', w.outputs && w.outputs.sender ? `${w.outputs.sender.maxSendMs.toFixed(1)} ms${w.outputs.pacingMbps ? ` @ ${w.outputs.pacingMbps} Mbit/s` : ' (unpaced)'}` : '—'],
+      ['Output frames dropped', w.outputs ? w.outputs.droppedFrames : 0],
       ['Audio out', p.audioOut || '—'], ['Display', p.display], ['MultiSync', STATUS.multisync.sending ? 'sending' : STATUS.mode === 'remote' ? `following ${STATUS.multisync.lastMaster || '—'}` : 'off'],
     ].map(([k, v]) => `<div class="stat"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join('');
   }
@@ -1047,8 +1049,10 @@
         <div class="card"><h3>Timing</h3><div class="row">
           <label>Lights offset (ms) <input type="number" id="offset" value="${CONFIG.syncOffsetMs}"></label>
           <label class="inline"><input type="checkbox" id="blank" ${CONFIG.blankBetweenSequences ? 'checked' : ''}> Blank lights between sequences</label>
+          <label>Pacing (Mbit/s per controller) <input type="number" id="pacing" min="0" max="1000" step="5" value="${CONFIG.outputPacingMbps ?? 90}" style="width:90px"></label>
           <button class="btn" id="saveTiming">Save</button></div>
-          <p class="dim">Positive shows the lights earlier than the audio. Use it for fixed latency in your audio chain (receiver, FM transmitter); a gap that grows during a song is a bug, not something to tune here.</p></div>
+          <p class="dim">Positive offset shows the lights earlier than the audio. Use it for fixed latency in your audio chain (receiver, FM transmitter); a gap that grows during a song is a bug, not something to tune here.</p>
+          <p class="dim">Pacing spreads each controller's packets out like FPP does (90 by default). Without it a big matrix's frame leaves at gigabit speed and the switch drops packets on the way to a 100 Mbit device (DDP errors, stale lines). 0 turns it off.</p></div>
         <div class="card"><div class="row"><h3 style="margin:0">Controllers</h3><span class="spacer"></span>
           <button class="btn" data-add="ddp">Add DDP</button><button class="btn" data-add="e131">Add E1.31</button><button class="btn primary" id="saveOuts">Save</button></div>
           <div class="table-wrap"><table><thead><tr><th>On</th><th>Type</th><th>Description</th><th>IP / multicast</th><th>Start ch</th><th>Channels / universes</th><th></th></tr></thead><tbody>
@@ -1069,7 +1073,7 @@
           <button class="btn" data-test="solid" data-color="255,255,255">White</button><button class="btn" data-test="solid" data-color="255,0,0">Red</button>
           <button class="btn" data-test="solid" data-color="0,255,0">Green</button><button class="btn" data-test="solid" data-color="0,0,255">Blue</button>
           <button class="btn primary" data-test="">Off</button></div></div>`;
-      $('#saveTiming').onclick = guard(() => saveConfig({ syncOffsetMs: +$('#offset').value || 0, blankBetweenSequences: $('#blank').checked }));
+      $('#saveTiming').onclick = guard(() => saveConfig({ syncOffsetMs: +$('#offset').value || 0, blankBetweenSequences: $('#blank').checked, outputPacingMbps: Math.max(0, +$('#pacing').value || 0) }));
       $$('[data-add]', el).forEach((b) => (b.onclick = () => {
         const last = outs[outs.length - 1];
         outs.push(b.dataset.add === 'ddp' ? { type: 'ddp', enabled: true, ip: '', startChannel: 1, channelCount: 512 } : { type: 'e131', enabled: true, multicast: true, universe: last && last.type === 'e131' ? (last.universe || 1) + (last.universeCount || 1) : 1, universeCount: 1, universeSize: 512, startChannel: 1 });
