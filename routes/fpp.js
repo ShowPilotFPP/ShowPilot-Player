@@ -114,7 +114,63 @@ module.exports = function fppRoutes(ctx) {
   r.get('/system/fppd/restart', async (req, res) => { await plugins.loadAll().catch(() => {}); res.json({ status: 'OK' }); });
   r.get('/cape', (req, res) => res.status(404).json({ id: 'No Cape!' }));
   r.get('/proxies', (req, res) => res.json([]));
+  // ---- xLights FPP Connect: UDP Out (controller list) -> Player outputs.
+  const outputsMap = require('../lib/fppcompat/outputs-map');
+  const cfgFile = (name) => {
+    const n = paths.safeName(name);
+    return n ? path.join(paths.dir('config'), n) : null;
+  };
+  r.get('/channel/output/universeOutputs', (req, res) => {
+    // Keep FPP-owned keys xLights round-trips (pacing etc.) from the last upload.
+    let saved = null;
+    try { saved = JSON.parse(fs.readFileSync(cfgFile('co-universes.json'), 'utf8')); } catch {}
+    const cur = outputsMap.toFpp(config.get().outputs);
+    if (saved && Array.isArray(saved.channelOutputs) && saved.channelOutputs[0]) {
+      cur.channelOutputs[0] = { ...saved.channelOutputs[0], universes: cur.channelOutputs[0].universes };
+    }
+    res.json(cur);
+  });
+  r.post('/channel/output/universeOutputs', jsonBody, (req, res) => {
+    const body = req.body || {};
+    const { outputs, skipped } = outputsMap.fromFpp(body);
+    try { fs.writeFileSync(cfgFile('co-universes.json'), JSON.stringify(body, null, 2)); } catch {}
+    config.update({ outputs });
+    if (skipped.length) require('../lib/log').warn('fpp', `xLights sent ${skipped.length} output(s) of a type ShowPilot Player doesn't send yet (Art-Net/broadcast): ${skipped.map((x) => x.description || x.address).join(', ')}`);
+    res.json({ status: 'OK', message: '', outputs: outputs.length, skipped: skipped.length });
+  });
+  // Pixel/cape/serial outputs don't exist on this player.
   r.get('/channel/output/:file', (req, res) => res.status(404).json({ status: 'not supported' }));
+  r.post('/channel/output/:file', (req, res) => res.status(404).json({ status: 'not supported' }));
+
+  // ---- Pixel overlay models (FPP Connect "Models"): stored like FPP's
+  // config/model-overlays.json; GET returns the array, POST takes either
+  // {"models":[...]} (what xLights sends) or a bare array.
+  r.get('/models', (req, res) => {
+    let j = null;
+    try { j = JSON.parse(fs.readFileSync(cfgFile('model-overlays.json'), 'utf8')); } catch {}
+    res.json(Array.isArray(j) ? j : (j && Array.isArray(j.models) ? j.models : []));
+  });
+  r.post('/models', jsonBody, (req, res) => {
+    const b = req.body;
+    const models = Array.isArray(b) ? b : (b && Array.isArray(b.models) ? b.models : null);
+    if (!models) return res.status(400).json({ Status: 'Error', Message: 'expected {"models":[...]}' });
+    fs.writeFileSync(cfgFile('model-overlays.json'), JSON.stringify({ models }, null, 2));
+    res.json({ Status: 'OK', Message: '' });
+  });
+
+  // ---- Config files (virtual display map, submodels, model groups, ...).
+  r.get('/configfile/:name', (req, res) => {
+    const f = cfgFile(req.params.name);
+    if (!f || !fs.existsSync(f)) return res.status(404).json({ Status: 'Error', Message: 'not found' });
+    res.sendFile(f);
+  });
+  r.post('/configfile/:name', express.raw({ type: () => true, limit: '32mb' }), (req, res) => {
+    const f = cfgFile(req.params.name);
+    if (!f) return res.status(400).json({ Status: 'Error', Message: 'bad name' });
+    fs.writeFileSync(f + '.tmp', Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
+    fs.renameSync(f + '.tmp', f);
+    res.json({ Status: 'OK', Message: '' });
+  });
 
   // ------------------------------------------------------------ settings
   r.get('/settings/:name', (req, res) => {
@@ -123,7 +179,12 @@ module.exports = function fppRoutes(ctx) {
     res.json({ name: req.params.name, value: v });
   });
   r.put('/settings/:name', text, (req, res) => {
-    try { settingsFile.write(req.params.name, typeof req.body === 'string' ? req.body : ''); res.json({ status: 'OK' }); }
+    try {
+      const v = typeof req.body === 'string' ? req.body : '';
+      settingsFile.write(req.params.name, v);
+      if (req.params.name === 'HostDescription') config.update({ hostDescription: v });
+      res.json({ status: 'OK' });
+    }
     catch (e) { res.status(400).json({ status: e.message }); }
   });
   r.get('/plugin/:repo/settings/:key', (req, res) => {

@@ -105,3 +105,30 @@ test('security: ".." is never a plugin, and bad plugin output cannot crash the p
   assert.equal((await fetch(`${B}/api/system/info`)).status, 200, 'player still up');
   assert.equal((await fetch(`${B}/api/command/Stop%20Now/%E0%A4%A`)).status, 400);
 });
+
+test('FPP Connect: models, UDP outputs and config files', async () => {
+  const j = (r) => r.json();
+  const post = (u, body, type = 'application/json') => fetch(B + u, { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body), headers: { 'Content-Type': type } });
+  assert.deepEqual(await j(await fetch(`${B}/api/models`)), []);
+  const models = { models: [{ Name: 'Matrix', StartChannel: 1, ChannelCount: 6144, Type: 'Channel', Orientation: 'horizontal', StrandsPerString: 1, StringCount: 32, xLights: true }] };
+  assert.equal((await post('/api/models', models)).status, 200);
+  assert.equal((await j(await fetch(`${B}/api/models`)))[0].Name, 'Matrix');
+
+  const udp = { channelOutputs: [{ type: 'universes', enabled: 1, startChannel: 1, channelCount: -1, interface: 'eth0', universes: [
+    { active: 1, description: 'Roof', id: 1, startChannel: 1, universeCount: 4, channelCount: 510, type: 0, address: '', priority: 0 },
+    { active: 1, description: 'Tree', id: 1, startChannel: 2041, universeCount: 1, channelCount: 3000, type: 4, address: '10.0.0.9' },
+    { active: 1, description: 'Old', id: 50, startChannel: 5041, universeCount: 1, channelCount: 512, type: 3, address: '10.0.0.8' },
+  ] }] };
+  const r = await j(await post('/api/channel/output/universeOutputs', udp));
+  assert.equal(r.outputs, 2);
+  assert.equal(r.skipped, 1);
+  const st = await j(await fetch(`${B}/api/player/config`));
+  assert.deepEqual(st.outputs.map((o) => [o.type, o.startChannel, o.channelCount || o.universeCount]), [['e131', 1, 4], ['ddp', 2041, 3000]]);
+  const back = await j(await fetch(`${B}/api/channel/output/universeOutputs`));
+  assert.equal(back.channelOutputs[0].interface, 'eth0', 'FPP-owned keys round-trip');
+  assert.equal(back.channelOutputs[0].universes.length, 2);
+
+  assert.equal((await post('/api/configfile/virtualdisplaymap', '# map', 'text/plain')).status, 200);
+  assert.equal(await (await fetch(`${B}/api/configfile/virtualdisplaymap`)).text(), '# map');
+  assert.equal((await fetch(`${B}/api/configfile/..%2Fsettings`)).status >= 400, true);
+});
