@@ -53,6 +53,8 @@ test('audio-clocked playback, pause and exact resume', { skip, timeout: 60000 },
     assert.ok(st.fps >= 37 && st.fps <= 41, `fps ${st.fps}`);
     assert.ok(st.mediaMs > snap.positionMs + 800, `lights clock ${st.mediaMs} after resume at ${snap.positionMs}`);
     assert.ok(Math.abs(Math.floor(st.mediaMs / STEP) - st.frame) <= 1, `frame ${st.frame} vs clock ${st.mediaMs}`);
+    // Regression: a boundary race in the scheduler sent ~1.5% of frames a whole frame late.
+    assert.ok(st.total.over20 <= 1, `${st.total.over20} frames over 20 ms late`);
 
     const ended = new Promise((r) => p.once('end', r));
     await ended;
