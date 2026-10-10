@@ -1,0 +1,44 @@
+#!/bin/bash
+# ShowPilot Player: FPP-compatible environment for plugin scripts.
+# Sourced by plugin install/start scripts the same way FPP's scripts/common is.
+BINDIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+FPPDIR=${FPPDIR:-$(dirname "$BINDIR")}
+FPPBINDIR="${FPPDIR}/src"
+SRCDIR="${FPPDIR}/src"
+SCRIPTDIR="${FPPDIR}/scripts"
+MEDIADIR=${MEDIADIR:-/home/fpp/media}
+if [ -f "${FPPDIR}/www/media_root.txt" ]; then MEDIADIR=$(cat "${FPPDIR}/www/media_root.txt"); fi
+LOGDIR="${MEDIADIR}/logs"
+CFGDIR="${MEDIADIR}/config"
+CFGFILE="${MEDIADIR}/settings"
+SETTINGSFILE="${CFGFILE}"
+PLUGINDIR="${PLUGINDIR:-${MEDIADIR}/plugins}"
+FPPUSER=fpp
+FPPGROUP=fpp
+SUDO=${SUDO:-}
+FPPPLATFORM="Raspberry Pi"
+FPPVERSION="10.0"
+SHOWPILOT_PLAYER=1
+export BINDIR FPPDIR FPPBINDIR SRCDIR SCRIPTDIR MEDIADIR LOGDIR CFGDIR CFGFILE SETTINGSFILE PLUGINDIR FPPUSER FPPGROUP SUDO FPPPLATFORM FPPVERSION SHOWPILOT_PLAYER
+
+getSetting() {
+  local key="$1"
+  [ -f "${SETTINGSFILE}" ] || return 0
+  grep -E "^${key}[[:space:]]*=" "${SETTINGSFILE}" 2>/dev/null | tail -1 | sed -e 's/^[^=]*=[[:space:]]*//' -e 's/^"//' -e 's/"[[:space:]]*$//'
+}
+
+setSetting() {
+  local key="$1" value="$2"
+  touch "${SETTINGSFILE}"
+  (
+    flock -w 5 9 || true
+    local tmp="${SETTINGSFILE}.tmp.$$"
+    grep -v -E "^${key}[[:space:]]*=" "${SETTINGSFILE}" > "$tmp" 2>/dev/null || true
+    echo "${key} = \"${value}\"" >> "$tmp"
+    cat "$tmp" > "${SETTINGSFILE}"
+    rm -f "$tmp"
+  ) 9>"${SETTINGSFILE}.lock"
+}
+
+# Plugins ask FPP for a restart this way; ShowPilot Player reloads plugins instead.
+teeOutput() { cat; }

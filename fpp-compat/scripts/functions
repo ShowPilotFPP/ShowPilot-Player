@@ -1,0 +1,8 @@
+#!/bin/bash
+# ShowPilot Player: minimal stand-in for FPP's scripts/functions.
+. "$(dirname "${BASH_SOURCE[0]}")/common"
+runPreStartScripts() { :; }
+runPostStartScripts() { :; }
+runPreStopScripts() { :; }
+runPostStopScripts() { :; }
+if [ -n "$1" ] && declare -F "$1" >/dev/null; then "$@"; fi

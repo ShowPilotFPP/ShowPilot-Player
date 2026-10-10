@@ -1,0 +1,107 @@
+// FPP-compatible HTTP API: what xLights FPP Connect and plugins depend on.
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { execFileSync } = require('child_process');
+process.env.SPP_MEDIA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'spp-api-'));
+process.env.SPP_PORT = String(30000 + Math.floor(Math.random() * 20000));
+process.env.SPP_FPPDIR = path.join(__dirname, '..', 'fpp-compat');
+process.env.SPP_AUDIO_NULL = '1';
+process.env.SPP_DISPLAY = '0';
+
+const test = require('node:test');
+const assert = require('node:assert');
+
+const has = (bin) => { try { execFileSync('which', [bin], { stdio: 'ignore' }); return true; } catch { return false; } };
+const B = `http://127.0.0.1:${process.env.SPP_PORT}`;
+let ctx;
+
+test.before(async () => {
+  const { main } = require('../server');
+  ctx = await main();
+  await new Promise((r) => setTimeout(r, 300));
+});
+test.after(async () => { try { await ctx.player.close(); ctx.multisync.close(); ctx.showpilot.close(); ctx.scheduler.stop(); } catch {} setTimeout(() => process.exit(0), 100); });
+
+test('discovery: system info and multiSyncSystems carry what xLights needs', async () => {
+  const info = await (await fetch(`${B}/api/system/info`)).json();
+  assert.ok(info.uuid);
+  assert.equal(info.majorVersion, 9);
+  assert.equal(info.minorVersion, 3);
+  const ms = await (await fetch(`${B}/api/fppd/multiSyncSystems`)).json();
+  assert.ok(ms.systems.length >= 1);
+  assert.ok(ms.systems[0].typeId > 0 && ms.systems[0].typeId < 0x80);
+});
+
+test('chunked PATCH upload (FPP Connect) reassembles the file', async () => {
+  const data = Buffer.alloc(100000);
+  for (let i = 0; i < data.length; i++) data[i] = (i * 31) & 255;
+  assert.equal((await fetch(`${B}/api/sequence/up/meta`)).status, 404, 'missing file forces an upload');
+  const chunk = 40000;
+  for (let off = 0; off < data.length; off += chunk) {
+    const body = data.subarray(off, off + chunk);
+    const r = await fetch(`${B}/api/file/sequences`, { method: 'PATCH', body,
+      headers: { 'Content-Type': 'application/offset+octet-stream', 'Upload-Offset': String(off), 'Upload-Length': String(data.length), 'Upload-Name': 'up.bin' } });
+    assert.equal(r.status, 200);
+    const j = await r.json();
+    assert.equal(j.status, 'OK');
+  }
+  const got = fs.readFileSync(path.join(process.env.SPP_MEDIA_DIR, 'sequences', 'up.bin'));
+  assert.ok(got.equals(data));
+  const bad = await fetch(`${B}/api/file/sequences`, { method: 'PATCH', body: Buffer.alloc(1), headers: { 'Upload-Offset': '0', 'Upload-Length': '1', 'Upload-Name': '../evil' } });
+  assert.equal(bad.status, 400);
+  const late = await fetch(`${B}/api/file/sequences`, { method: 'PATCH', body: Buffer.alloc(1), headers: { 'Upload-Offset': '5', 'Upload-Length': '10', 'Upload-Name': 'never.bin' } });
+  assert.equal(late.status, 409);
+});
+
+test('playlists and commands', async () => {
+  const pl = { name: 'P', mainPlaylist: [{ type: 'pause', duration: 30 }] };
+  assert.equal((await fetch(`${B}/api/playlist/P`, { method: 'POST', body: JSON.stringify(pl), headers: { 'Content-Type': 'application/json' } })).status, 200);
+  assert.deepEqual(await (await fetch(`${B}/api/playlists`)).json(), ['P']);
+  const r = await fetch(`${B}/api/command/Start%20Playlist/P/false`);
+  assert.equal(r.status, 200);
+  const st = await (await fetch(`${B}/api/fppd/status`)).json();
+  assert.equal(st.current_playlist.playlist, 'P');
+  assert.equal((await fetch(`${B}/api/command/No%20Such%20Command`)).status, 404);
+  await fetch(`${B}/api/playlists/stop`);
+});
+
+test('plugin hosting: settings, PHP page, api.php endpoint, command', { skip: !has('php-cgi') && 'php-cgi not installed' }, async () => {
+  const dir = path.join(process.env.SPP_MEDIA_DIR, 'plugins', 'fpp-t');
+  fs.mkdirSync(path.join(dir, 'commands'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'pluginInfo.json'), JSON.stringify({ repoName: 'fpp-t', name: 'T' }));
+  fs.writeFileSync(path.join(dir, 'menu.inc'), "<?php $m = [['type'=>'content','page'=>'p.php']]; ?>");
+  fs.writeFileSync(path.join(dir, 'p.php'), '<b>v<?php echo getFPPMajorVersion(); ?>:<?php echo ReadSettingFromFile("k","fpp-t"); ?></b>');
+  fs.writeFileSync(path.join(dir, 'api.php'), "<?php function getEndpointsfppt(){return [['method'=>'GET','endpoint'=>'echo/:x','callback'=>'tEcho']];} function tEcho(){return json(['x'=>params('x')]);}");
+  fs.writeFileSync(path.join(dir, 'commands', 'descriptions.json'), JSON.stringify([{ name: 'T - Touch', script: 't.sh', args: [] }]));
+  fs.writeFileSync(path.join(dir, 'commands', 't.sh'), '#!/bin/sh\ntouch "$MEDIADIR/logs/t-touched"\n', { mode: 0o755 });
+  await ctx.plugins.loadAll();
+  await fetch(`${B}/api/plugin/fpp-t/settings/k`, { method: 'PUT', body: 'hello', headers: { 'Content-Type': 'text/plain' } });
+  const page = await (await fetch(`${B}/plugin.php?plugin=fpp-t&page=p.php&nopage=1`)).text();
+  assert.equal(page, '<b>v10:hello</b>');
+  assert.deepEqual(await (await fetch(`${B}/api/plugin/fpp-t/echo/abc`)).json(), { x: 'abc' });
+  assert.equal((await fetch(`${B}/plugin.php?plugin=fpp-t&page=../../settings`)).status, 404);
+  await fetch(`${B}/api/command/T%20-%20Touch`);
+  assert.ok(fs.existsSync(path.join(process.env.SPP_MEDIA_DIR, 'logs', 't-touched')));
+});
+
+test('security: ".." is never a plugin, and bad plugin output cannot crash the player', { skip: !has('php-cgi') && 'php-cgi not installed' }, async () => {
+  fs.writeFileSync(path.join(process.env.SPP_MEDIA_DIR, 'upload', 'x.php'), '<?php echo "pwned";');
+  for (const u of ['/plugin.php?plugin=..&page=upload/x.php&nopage=1', '/plugin.php?plugin=..&file=plugindata/showpilot-player/sessionSecret', '/plugin.php?plugin=.&page=x.php']) {
+    const r = await fetch(B + u);
+    assert.equal(r.status, 404, u);
+    assert.ok(!(await r.text()).includes('pwned'));
+  }
+  assert.notEqual((await fetch(`${B}/api/plugin/%2E%2E/x`)).status, 200);
+  const del = await fetch(`${B}/api/player/plugins/..`, { method: 'DELETE' });
+  assert.notEqual(del.status, 200);
+  assert.ok(fs.existsSync(path.join(process.env.SPP_MEDIA_DIR, 'sequences')), 'media folder intact');
+
+  const dir = path.join(process.env.SPP_MEDIA_DIR, 'plugins', 'fpp-bad');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'api.php'), "<?php function getEndpointsfppbad(){return [['method'=>'GET','endpoint'=>'s','callback'=>'b']];} function b(){ header('Status: 42'); return 'x'; }");
+  const r = await fetch(`${B}/api/plugin/fpp-bad/s`);
+  assert.equal(r.status, 502);
+  assert.equal((await fetch(`${B}/api/system/info`)).status, 200, 'player still up');
+  assert.equal((await fetch(`${B}/api/command/Stop%20Now/%E0%A4%A`)).status, 400);
+});

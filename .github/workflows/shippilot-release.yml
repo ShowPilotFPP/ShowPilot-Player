@@ -1,0 +1,185 @@
+# Ship this repo through ShipPilot (ShipPilot v0.4.0+). Approving a pull request
+# from a claude/* branch ships it automatically; or run it from the Actions
+# tab on the branch you want to ship (e.g. a pull request's branch), after
+# bumping the version there. ShipPilot runs its normal pipeline: preflight
+# checks, commit to the target branch, tag, GitHub Release, auto-deploy; this
+# job then waits for the deploys and fails if any fails.
+#
+# Secrets (Settings -> Secrets and variables -> Actions):
+#   SHIPPILOT_URL    the address ShipPilot opens at in a browser, e.g. https://example.com/push
+#   SHIPPILOT_TOKEN  a ShipPilot API token limited to showpilot-player
+
+name: Ship via ShipPilot
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_message:
+        description: "Release message (first line becomes the GitHub Release title)"
+        required: true
+
+  # Approving a pull request from a claude/* branch ships it (v2).
+  pull_request_review:
+    types: [submitted]
+  # ...or commenting /ship on a Claude release PR ships it (v2, for PRs you can't approve,
+  # e.g. ones opened in your name).
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write        # delete the release branch after shipping
+  pull-requests: write   # comment on / close the release PR and its source
+  issues: write          # close the source issue
+
+jobs:
+  ship:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.review.state == 'approved' &&
+       startsWith(github.event.pull_request.head.ref, 'claude/') &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+       startsWith(github.event.comment.body, '/ship') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    concurrency:
+      group: shippilot-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Resolve the pull request to ship (approval or /ship comment)
+        id: pr
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUM: ${{ github.event.pull_request.number || github.event.issue.number }}
+          EVENT: ${{ github.event_name }}
+          WHO: ${{ github.event.sender.login }}
+        run: |
+          set -euo pipefail
+          gh pr view "$NUM" -R "$GITHUB_REPOSITORY" --json number,headRefName,headRefOid,baseRefName,title,body,isCrossRepository > "$RUNNER_TEMP/pr.json"
+          python3 - <<'PY'
+          import json, os
+          t = os.environ['RUNNER_TEMP']
+          d = json.load(open(t + '/pr.json'))
+          if not d['headRefName'].startswith('claude/') or d['isCrossRepository']:
+              print(f"::error::Only Claude's release PRs (claude/* branches in this repo) can be shipped this way; #{d['number']} is from {d['headRefName']}.")
+              raise SystemExit(1)
+          open(t + '/pr_title.txt', 'w').write(d['title'])
+          open(t + '/pr_body.txt', 'w').write(d['body'] or '')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as o:
+              o.write(f"number={d['number']}\nsha={d['headRefOid']}\nhead={d['headRefName']}\nbase={d['baseRefName']}\n")
+          PY
+          if [ "$EVENT" = "issue_comment" ]; then gh pr comment "$NUM" -R "$GITHUB_REPOSITORY" --body "Shipping this through ShipPilot… (started by @$WHO)" || true; fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.sha || github.ref }}
+
+      - name: Work out the target and version
+        run: |
+          set -euo pipefail
+          REPO_SLUG=showpilot-player; TARGET_BRANCH=main; WITH_TAG=true
+          VERSION=$(node -p "require('./package.json').version")
+          case "$VERSION" in
+            *-*) echo "::error::$VERSION is a pre-release version; bump to a stable version to ship."; exit 1 ;;
+          esac
+          SHIP_FROM="${GITHUB_REF_NAME}"
+          if [ -n "${{ steps.pr.outputs.number }}" ]; then SHIP_FROM="${{ steps.pr.outputs.head }}"; fi
+          if [ "$SHIP_FROM" = "$TARGET_BRANCH" ]; then
+            echo "::error::Run this on the branch you want to ship (e.g. a PR branch), not $TARGET_BRANCH."
+            exit 1
+          fi
+          echo "REPO_SLUG=$REPO_SLUG" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "WITH_TAG=$WITH_TAG" >> "$GITHUB_ENV"
+          echo "Shipping $REPO_SLUG $VERSION from $SHIP_FROM to $TARGET_BRANCH"
+
+      - name: Build the release tarball
+        env:
+          INPUT_MESSAGE: ${{ inputs.commit_message }}
+        run: |
+          set -euo pipefail
+          if [ -n "${{ steps.pr.outputs.number }}" ]; then
+            export COMMIT_MESSAGE="$(printf '%s\n\n%s' "$(cat "$RUNNER_TEMP/pr_title.txt")" "$(cat "$RUNNER_TEMP/pr_body.txt")")"
+          else
+            # The Run-workflow form gives one line: trim it, and turn a typed \n into a line break.
+            export COMMIT_MESSAGE="$(printf '%s' "$INPUT_MESSAGE" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/[[:space:]]*\\n[[:space:]]*/\n/g')"
+          fi
+          mkdir -p out
+          # git archive = tracked files only: no .git, node_modules, config.js or data/.
+          git archive --format=tar --prefix="${REPO_SLUG}/" HEAD | tar -x -C out
+          python3 - <<PY
+          import json, os
+          m = {"repo": "${REPO_SLUG}", "version": "${VERSION}", "commit_message": os.environ["COMMIT_MESSAGE"]}
+          if "${WITH_TAG}" == "true":
+              m["tag"] = "v${VERSION}"
+          json.dump(m, open("out/${REPO_SLUG}/.release.json", "w"), indent=2)
+          PY
+          tar -czf release.tar.gz -C out "${REPO_SLUG}"
+          echo "Packaged ${REPO_SLUG} ${VERSION} (tag: ${WITH_TAG})"
+
+      - name: Upload to ShipPilot and wait for deploys
+        env:
+          SHIPPILOT_URL: ${{ secrets.SHIPPILOT_URL }}
+          SHIPPILOT_TOKEN: ${{ secrets.SHIPPILOT_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -z "${SHIPPILOT_URL}" ] || [ -z "${SHIPPILOT_TOKEN}" ]; then
+            echo "::error::The repository secrets SHIPPILOT_URL and SHIPPILOT_TOKEN must both be set (Settings → Secrets and variables → Actions → Secrets). Missing: $([ -z "${SHIPPILOT_URL}" ] && echo -n 'SHIPPILOT_URL ')$([ -z "${SHIPPILOT_TOKEN}" ] && echo -n 'SHIPPILOT_TOKEN')"
+            exit 1
+          fi
+          URL="${SHIPPILOT_URL%/}"
+          HTTP=$(curl -sS -o result.json -w '%{http_code}' --max-time 300 \
+            -H "Authorization: Bearer ${SHIPPILOT_TOKEN}" \
+            -F "tarball=@release.tar.gz" "${URL}/api/release")
+          python3 -c "import json; d=json.load(open('result.json')); print(d.get('log') or d)" || cat result.json
+          if [ "$HTTP" != "200" ]; then
+            echo "::error::ShipPilot refused the release (HTTP $HTTP): $(python3 -c "import json; print(json.load(open('result.json')).get('error'))" 2>/dev/null)"
+            exit 1
+          fi
+          RID=$(python3 -c "import json; print(json.load(open('result.json'))['releaseId'])")
+          DEPLOYS=$(python3 -c "import json; d=json.load(open('result.json'))['deploys']; print('pending' if d == 'pending' else 'none')")
+          echo "Shipped as ShipPilot release #${RID}."
+          if [ "$DEPLOYS" = "none" ]; then echo "No auto-deploy environments for this repo."; exit 0; fi
+          echo "Waiting for auto-deploys (up to 15 minutes)..."
+          for i in $(seq 1 90); do
+            sleep 10
+            curl -sS --max-time 30 -H "Authorization: Bearer ${SHIPPILOT_TOKEN}" "${URL}/api/releases/${RID}/deploys" -o deploys.json || continue
+            if python3 -c "import json,sys; sys.exit(0 if json.load(open('deploys.json')).get('allSettled') else 1)"; then
+              python3 - <<'PY'
+          import json, sys
+          d = json.load(open('deploys.json'))['deploys']
+          bad = [x for x in d if x['status'] != 'success']
+          for x in d:
+              print(f"  {x.get('env_name') or x.get('env_slug')}: {x['status']}" + (f" - {x['error_message']}" if x.get('error_message') else ''))
+          if bad:
+              print("::error::" + ", ".join(f"{x.get('env_name') or x.get('env_slug')} deploy {x['status']}" for x in bad))
+              sys.exit(1)
+          print("All deploys succeeded.")
+          PY
+              exit $?
+            fi
+          done
+          echo "::warning::Deploys still running after 15 minutes; check ShipPilot."
+
+      - name: Close the release PR and its source
+        if: success() && steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -uo pipefail
+          PR_BODY="$(cat "$RUNNER_TEMP/pr_body.txt")"
+          gh pr comment "$PR_NUMBER" --body "Shipped as v${VERSION} through ShipPilot. Thanks!"
+          gh pr close "$PR_NUMBER" --delete-branch || true
+          SRC=$(printf '%s' "$PR_BODY" | sed -n 's/^Source: #\([0-9][0-9]*\).*/\1/p' | head -1)
+          if [ -n "$SRC" ] && [ "$SRC" != "$PR_NUMBER" ]; then
+            if gh pr view "$SRC" --json state -q .state >/dev/null 2>&1; then
+              gh pr comment "$SRC" --body "Shipped in v${VERSION} (via #${PR_NUMBER}). Thank you for the contribution!" || true
+              gh pr close "$SRC" || true
+            else
+              gh issue comment "$SRC" --body "Fixed in v${VERSION} (via #${PR_NUMBER}). Thanks for the report!" || true
+              gh issue close "$SRC" --reason completed || true
+            fi
+          fi

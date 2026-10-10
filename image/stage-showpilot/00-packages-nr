@@ -1,0 +1,13 @@
+mpv
+ffmpeg
+php-cgi
+php-cli
+php-curl
+php-xml
+git
+curl
+ca-certificates
+xz-utils
+avahi-daemon
+alsa-utils
+jq

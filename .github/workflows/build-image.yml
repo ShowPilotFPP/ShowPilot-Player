@@ -1,0 +1,51 @@
+# Build the flashable Raspberry Pi SD card image for a release and attach it
+# to that GitHub Release. Runs automatically when ShipPilot publishes a
+# release; can also be run by hand for any existing tag.
+name: Build SD card image
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Work out the tag
+        run: echo "TAG=${{ github.event.release.tag_name || inputs.tag }}" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Free disk space (pi-gen needs ~15 GB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
+
+      - name: Enable arm64 emulation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build image
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q binfmt-support qemu-user-static
+          sudo install -d -o "$USER" /mnt/spp-pigen
+          WORK=/mnt/spp-pigen bash image/build.sh "${TAG#v}"
+          ls -lh image/out
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" image/out/*.img.xz image/out/*.sha256 --clobber

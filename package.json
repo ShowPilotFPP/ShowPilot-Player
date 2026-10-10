@@ -1,0 +1,26 @@
+{
+  "name": "showpilot-player",
+  "version": "0.1.0",
+  "description": "Lean show player for xLights sequences: fseq + audio on one clock, DDP/E1.31 output, video, virtual matrix, FPP MultiSync, FPP Connect uploads, FPP script plugins and ShowPilot built in.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test --test-concurrency=1 test/*.test.js"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ShowPilotFPP/ShowPilot-Player.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ShowPilotFPP/ShowPilot-Player/issues"
+  },
+  "homepage": "https://github.com/ShowPilotFPP/ShowPilot-Player#readme",
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "dependencies": {
+    "express": "^4.21.1",
+    "ws": "^8.18.0"
+  }
+}

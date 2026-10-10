@@ -1,0 +1,12 @@
+#!/bin/bash
+# ShowPilot Player: run a plugin script with the right interpreter (FPP scripts/eventScript).
+. "$(dirname "${BASH_SOURCE[0]}")/common"
+export MEDIADIR FPPDIR CFGDIR CFGFILE SETTINGSFILE LOGDIR
+f="$1"; shift
+case "$f" in
+  *.sh) exec /bin/bash "$f" "$@" ;;
+  *.pl) exec /usr/bin/perl "$f" "$@" ;;
+  *.php) exec /usr/bin/php "$f" "$@" ;;
+  *.py) exec /usr/bin/python3 "$f" "$@" ;;
+  *) [ -x "$f" ] && exec "$f" "$@" ;;
+esac

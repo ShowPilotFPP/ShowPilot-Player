@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShowPilot Player</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="login" class="login" hidden>
+  <form id="loginForm" class="card login-card">
+    <h1>ShowPilot Player</h1>
+    <label>Password <input type="password" id="loginPw" autocomplete="current-password" required></label>
+    <button class="btn primary" type="submit">Sign in</button>
+    <p class="err" id="loginErr"></p>
+  </form>
+</div>
+
+<div class="shell" id="shell">
+  <aside class="side" id="side">
+    <div class="brand"><span class="dot"></span><span class="brand-name">ShowPilot <b>Player</b></span></div>
+    <nav id="nav">
+      <a href="#dashboard" data-page="dashboard">Dashboard</a>
+      <a href="#playlists" data-page="playlists">Playlists</a>
+      <a href="#files" data-page="files">Files</a>
+      <a href="#schedule" data-page="schedule">Schedule</a>
+      <a href="#outputs" data-page="outputs">Outputs</a>
+      <a href="#display" data-page="display">Video &amp; Matrix</a>
+      <a href="#multisync" data-page="multisync">MultiSync</a>
+      <a href="#showpilot" data-page="showpilot">ShowPilot</a>
+      <a href="#plugins" data-page="plugins">Plugins</a>
+      <a href="#system" data-page="system">System</a>
+    </nav>
+    <div class="side-foot" id="sideFoot"></div>
+  </aside>
+  <main class="main">
+    <header class="top">
+      <button class="icon-btn" id="menuBtn" aria-label="Menu">&#9776;</button>
+      <h2 id="pageTitle">Dashboard</h2>
+      <div class="top-status" id="topStatus"></div>
+    </header>
+    <section id="page" class="page"></section>
+  </main>
+</div>
+<div id="toasts" class="toasts"></div>
+<script src="/app.js"></script>
+</body>
+</html>

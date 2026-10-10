@@ -1,0 +1,21 @@
+[Unit]
+Description=ShowPilot Player
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/showpilot-player
+ExecStart=/usr/local/bin/node /opt/showpilot-player/server.js
+Environment=NODE_ENV=production
+# Root, like fppd: it binds port 80, drives the display through DRM and runs
+# plugin install scripts. Higher priority keeps light frames on time.
+User=root
+Nice=-10
+Restart=always
+RestartSec=2
+LimitNOFILE=65536
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
