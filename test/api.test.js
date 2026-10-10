@@ -75,13 +75,21 @@ test('plugin hosting: settings, PHP page, api.php endpoint, command', { skip: !h
   fs.writeFileSync(path.join(dir, 'api.php'), "<?php function getEndpointsfppt(){return [['method'=>'GET','endpoint'=>'echo/:x','callback'=>'tEcho']];} function tEcho(){return json(['x'=>params('x')]);}");
   fs.writeFileSync(path.join(dir, 'commands', 'descriptions.json'), JSON.stringify([{ name: 'T - Touch', script: 't.sh', args: [] }]));
   fs.writeFileSync(path.join(dir, 'commands', 't.sh'), '#!/bin/sh\ntouch "$MEDIADIR/logs/t-touched"\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, 'commands', 'fail.sh'), '#!/bin/sh\necho "No payload specified" >&2\nexit 3\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, 'commands', 'descriptions.json'), JSON.stringify([{ name: 'T - Touch', script: 't.sh', args: [] }, { name: 'T - Fail', script: 'fail.sh', args: [] }]));
   await ctx.plugins.loadAll();
   await fetch(`${B}/api/plugin/fpp-t/settings/k`, { method: 'PUT', body: 'hello', headers: { 'Content-Type': 'text/plain' } });
   const page = await (await fetch(`${B}/plugin.php?plugin=fpp-t&page=p.php&nopage=1`)).text();
   assert.equal(page, '<b>v10:hello</b>');
+  // FPP enables short_open_tag and many plugins write "<?" (e.g. the IFTTT plugin's settings field).
+  fs.writeFileSync(path.join(dir, 's.php'), '<? $x = 2; if ($x > 1) { ?>shown<? } ?>|<?= ReadSettingFromFile("k","fpp-t") ?>');
+  assert.equal(await (await fetch(`${B}/plugin.php?plugin=fpp-t&page=s.php&nopage=1`)).text(), 'shown|hello');
   assert.deepEqual(await (await fetch(`${B}/api/plugin/fpp-t/echo/abc`)).json(), { x: 'abc' });
   assert.equal((await fetch(`${B}/plugin.php?plugin=fpp-t&page=../../settings`)).status, 404);
   await fetch(`${B}/api/command/T%20-%20Touch`);
+  const failed = await fetch(`${B}/api/command/T%20-%20Fail`);
+  assert.equal(failed.status, 500);
+  assert.match(await failed.text(), /exit 3.*No payload specified/, 'a failing plugin command reports its error');
   assert.ok(fs.existsSync(path.join(process.env.SPP_MEDIA_DIR, 'logs', 't-touched')));
 });
 

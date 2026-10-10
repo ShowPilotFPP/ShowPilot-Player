@@ -37,11 +37,21 @@ function installFppShim() {
   } catch (e) { log.warn('fpp', `could not install the plugin shim: ${e.message}`); }
 }
 
+// FPP's PHP settings (short_open_tag etc.) for every php/php-cgi a plugin
+// runs. The leading ':' keeps the system's own ini directory.
+function phpSettings() {
+  const dir = path.join(FPPDIR, 'etc', 'php');
+  if (!fs.existsSync(dir)) return;
+  const cur = process.env.PHP_INI_SCAN_DIR;
+  if (!cur || !cur.split(':').includes(dir)) process.env.PHP_INI_SCAN_DIR = (cur || '') + ':' + dir;
+}
+
 async function main() {
   paths.ensureLayout();
   config.load();
   log.info('main', `ShowPilot Player ${pkg.version} starting (media: ${paths.MEDIA_DIR})`);
   installFppShim();
+  phpSettings();
 
   const ctx = new EventEmitter();
   ctx.config = config;
