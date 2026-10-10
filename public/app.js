@@ -68,7 +68,7 @@
     current = page;
     $$('#nav a').forEach((a) => a.classList.toggle('on', a.dataset.page === page));
     $('#pageTitle').textContent = TITLES[page];
-    $('#side').classList.remove('open');
+    $('#side').classList.remove('open'); document.body.classList.remove('menu-open');
     const el = $('#page');
     el.innerHTML = '<p class="muted">Loading…</p>';
     try {
@@ -78,7 +78,13 @@
     } catch (e) { el.innerHTML = `<div class="card"><p class="err">${esc(e.message)}</p></div>`; }
   }
   window.addEventListener('hashchange', route);
-  $('#menuBtn').addEventListener('click', () => $('#side').classList.toggle('open'));
+  // Mobile menu: tapping outside it (the dimmed page), Escape or picking a page closes it.
+  const setMenu = (open) => { $('#side').classList.toggle('open', open); document.body.classList.toggle('menu-open', open); };
+  $('#menuBtn').addEventListener('click', (ev) => { ev.stopPropagation(); setMenu(!$('#side').classList.contains('open')); });
+  $('#scrim').addEventListener('click', () => setMenu(false));
+  $('#scrim').addEventListener('touchstart', (ev) => { ev.preventDefault(); setMenu(false); }, { passive: false });
+  document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') setMenu(false); });
+  $('#nav').addEventListener('click', (ev) => { if (ev.target.closest('a')) setMenu(false); });
 
   // Top bar status, refreshed everywhere.
   async function pollStatus() {
@@ -127,15 +133,17 @@
     $('#dashStart').onclick = guard(async () => {
       const v = $('#dashPl').value; if (!v) return;
       const repeat = $('#dashRepeat').checked;
+      let r;
       if (v.startsWith('pl:')) {
-        await api('POST', P('/play'), { playlist: v.slice(3), repeat });
+        r = await api('POST', P('/play'), { playlist: v.slice(3), repeat });
       } else {
         // A standalone sequence plays with the audio named inside it, if that file is here.
         const s = LIB.sequences.find((x) => x.name === v.slice(4));
         const media = s && s.mediaFilename && [...LIB.music, ...LIB.videos].some((m) => m.name === s.mediaFilename) ? s.mediaFilename : undefined;
-        await api('POST', P('/play'), { sequence: v.slice(4), media, repeat });
+        r = await api('POST', P('/play'), { sequence: v.slice(4), media, repeat });
       }
-      toast(`Playing ${v.slice(v.indexOf(':') + 1)}`);
+      toast(r && r.finished ? `${v.slice(v.indexOf(':') + 1)} ran and finished (nothing in it plays for long)` : `Playing ${v.slice(v.indexOf(':') + 1)}`);
+      pollStatus();
     });
     renderNow();
   };
@@ -375,7 +383,7 @@
     let drag = null;
     const wire = () => {
       const box = $('#plEditor');
-      $('#plPlay').onclick = guard(async () => { await api('POST', P('/play'), { playlist: pl.name, repeat: !!pl.repeat }); toast(`Playing ${pl.name}`); });
+      $('#plPlay').onclick = guard(async () => { const r = await api('POST', P('/play'), { playlist: pl.name, repeat: !!pl.repeat }); toast(r && r.finished ? `${pl.name} ran and finished` : `Playing ${pl.name}`); });
       $('#plMore').onclick = (ev) => { ev.stopPropagation(); $('#plMenu').hidden = !$('#plMenu').hidden; };
       document.addEventListener('click', () => { if ($('#plMenu')) $('#plMenu').hidden = true; }, { once: true });
       $$('#plMenu [data-m]').forEach((b) => (b.onclick = guard(async () => {

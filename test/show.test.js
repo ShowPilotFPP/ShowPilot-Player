@@ -127,3 +127,21 @@ test('sun times are in a sane range and dusk follows sunset', () => {
   assert.ok(t.sunrise < t.sunset);
   assert.equal(sunTimes(new Date(), null, null), null);
 });
+
+test('a repeating playlist where nothing can play stops with the reason instead of spinning', async () => {
+  class Failing extends FakePlayer { async play() { throw new Error('sequence not found'); } }
+  const p = new Failing(); const s = new Show(p);
+  playlists.save('Broken', { mainPlaylist: [seq('gone1'), seq('gone2')], repeat: 1 });
+  await s.start('Broken', { repeat: true });
+  assert.equal(s.isRunning(), false);
+  assert.match(s.lastProblem, /Nothing in "Broken" could play \(gone2\.fseq: sequence not found\)/);
+
+  // A trigger playlist that only runs a command runs it once, even with Repeat on.
+  const ran = [];
+  const s2 = new Show(new FakePlayer());
+  s2.runCommand = async (c) => { ran.push(c); };
+  playlists.save('Trigger', { mainPlaylist: [{ type: 'command', enabled: 1, command: 'IFTTT Webhook Trigger', args: [] }], repeat: 1 });
+  await s2.start('Trigger', { repeat: true });
+  assert.deepEqual(ran, ['IFTTT Webhook Trigger']);
+  assert.equal(s2.isRunning(), false);
+});

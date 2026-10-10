@@ -107,14 +107,21 @@ module.exports = function playerRoutes(ctx) {
   // ------------------------------------------------------------ transport
   r.post('/play', wrap(async (req) => {
     const b = req.body || {};
-    if (b.playlist) { await show.start(b.playlist, { repeat: !!b.repeat, startItem: b.startItem }); return { ok: true }; }
+    // Report what actually happened: a playlist whose items can't play stops
+    // right away, and the reason goes back to the page instead of a false "Playing".
+    const outcome = () => {
+      if (show.isRunning()) return { ok: true, playing: true };
+      if (show.lastProblem) { const e = new Error(show.lastProblem); e.status = 409; throw e; }
+      return { ok: true, playing: false, finished: true };
+    };
+    if (b.playlist) { await show.start(b.playlist, { repeat: !!b.repeat, startItem: b.startItem }); return outcome(); }
     if (!b.sequence && !b.media) throw new Error('nothing to play');
-    if (b.sequence && !b.media) { await show.start(playlists.forSequence(String(b.sequence), !!b.repeat), { repeat: !!b.repeat }); return { ok: true }; }
+    if (b.sequence && !b.media) { await show.start(playlists.forSequence(String(b.sequence), !!b.repeat), { repeat: !!b.repeat }); return outcome(); }
     // One-off item: run it as a tiny playlist so the show runner manages it.
     const tmpName = '_now';
     playlists.save(tmpName, { mainPlaylist: [{ type: b.sequence && b.media ? 'both' : b.sequence ? 'sequence' : 'media', enabled: 1, sequenceName: b.sequence || undefined, mediaName: b.media || undefined }] });
     await show.start(tmpName, { repeat: !!b.repeat });
-    return { ok: true };
+    return outcome();
   }));
   r.post('/stop', wrap(async (req) => { if (req.body && req.body.graceful) show.stopGracefully(); else await show.stopNow(); return { ok: true }; }));
   r.post('/next', wrap(async () => { await show.next(); return { ok: true }; }));
