@@ -137,3 +137,21 @@ test('system update: parse apt upgradable list and compare versions', () => {
   assert.ok(cmpVersion('v22.9.0', '22.10.0') < 0);
   assert.equal(cmpVersion('22.1.0', '22.1.0'), 0);
 });
+
+test('audio: automatic output prefers a USB sound card', () => {
+  const a = require('../lib/audio-devices');
+  const pi = ' 0 [vc4hdmi0       ]: vc4-hdmi - vc4-hdmi-0\n 1 [Headphones     ]: bcm2835_headpho - bcm2835 Headphones\n 2 [S3             ]: USB-Audio - Sound Blaster Play! 3\n';
+  assert.equal(a.resolve('auto', a.cards(pi)).id, 'alsa/plughw:CARD=S3,DEV=0');
+  assert.equal(a.resolve('auto', a.cards(' 1 [Headphones     ]: bcm2835_headpho - bcm2835 Headphones\n')).id, 'alsa');
+  assert.equal(a.resolve('alsa/plughw:CARD=Headphones,DEV=0', a.cards(pi)).id, 'alsa/plughw:CARD=Headphones,DEV=0');
+});
+
+test('fseq media name from xLights is reduced to the file name (Windows or Mac path)', () => {
+  for (const mf of ['C:\\Users\\me\\Show\\Audio\\Song One.mp3', '/Users/me/Show/Audio/Song One.mp3', 'Song One.mp3']) {
+    const f = path.join(tmp, 'mf.fseq');
+    writeFseq(f, { channelCount: 3, frames: frames(2, 3), compression: 0, mediaFile: mf });
+    const r = new FseqFile(f);
+    assert.equal(r.mediaFilename, 'Song One.mp3');
+    r.close();
+  }
+});

@@ -57,6 +57,14 @@ function ffprobe(file) {
 module.exports = function fppRoutes(ctx) {
   const { config, player, show, multisync, commands, plugins } = ctx;
   const r = express.Router();
+  // Record what xLights / plugins change (not reads, not every upload chunk),
+  // so "what did FPP Connect actually send?" is answerable from the log.
+  r.use((req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'PATCH' && req.method !== 'OPTIONS') {
+      res.on('finish', () => require('../lib/log').info('fpp-api', `${req.method} ${decodeURIComponent(req.originalUrl || req.url)} -> ${res.statusCode} (from ${req.socket.remoteAddress})`));
+    }
+    next();
+  });
   const raw = express.raw({ type: () => true, limit: '64mb' });
   const text = express.text({ type: () => true, limit: '1mb' });
   const jsonBody = express.json({ limit: '4mb', type: () => true });
@@ -275,7 +283,7 @@ module.exports = function fppRoutes(ctx) {
       if (size >= total && offset + body.length >= total) {
         fs.truncateSync(part, total);
         fs.renameSync(part, target); // atomic swap; a playing file keeps its old inode
-        ctx.emit && ctx.emit('upload', { dir, name });
+        require('../lib/log').info('fpp-api', `received ${dir}/${name} (${total} bytes)`);
         return res.json({ status: 'OK', file: name, dir: req.params.dir, size: String(total) });
       }
       res.json({ status: 'OK', file: name, dir: req.params.dir, size: String(offset + body.length) });

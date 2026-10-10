@@ -87,6 +87,7 @@ module.exports = function playerRoutes(ctx) {
       multisync: { sending: multisync.isSending(), lastMaster: multisync.stats.lastMaster, systems: multisync.systems.size },
       ips: ifaces().map((i) => i.address),
       problems: [
+        ...(config.get().outputs || []).some((o) => o.enabled !== false) ? [] : ['No controller outputs are set up, so no lights are sent. Add them on Outputs, or in xLights FPP Connect set this player\'s "UDP Out" to "All".'],
         ...require('../lib/health').missing().map((d) => `${d.bin} is not installed (${d.why}). Run System → System software to install it.`),
         ...(player.problems || []),
       ],
@@ -106,7 +107,7 @@ module.exports = function playerRoutes(ctx) {
     // One-off item: run it as a tiny playlist so the show runner manages it.
     const tmpName = '_now';
     playlists.save(tmpName, { mainPlaylist: [{ type: b.sequence && b.media ? 'both' : b.sequence ? 'sequence' : 'media', enabled: 1, sequenceName: b.sequence || undefined, mediaName: b.media || undefined }] });
-    await show.start(tmpName, { repeat: false });
+    await show.start(tmpName, { repeat: !!b.repeat });
     return { ok: true };
   }));
   r.post('/stop', wrap(async (req) => { if (req.body && req.body.graceful) show.stopGracefully(); else await show.stopNow(); return { ok: true }; }));
@@ -193,16 +194,11 @@ module.exports = function playerRoutes(ctx) {
   r.get('/updates', wrap(async (req) => ({ ...(await updater.check(req.query.force === '1')), canRollback: updater.canRollback() })));
   r.post('/updates/apply', wrap(() => updater.apply((m) => log.info('updater', m))));
   r.post('/updates/rollback', wrap(() => updater.rollback()));
-  r.get('/audio-devices', wrap(() => new Promise((resolve) => {
-    execFile(process.env.SPP_MPV_BIN || 'mpv', ['--audio-device=help', '--no-config'], { timeout: 10000 }, (err, out) => {
-      const list = [];
-      for (const line of String(out || '').split('\n')) {
-        const m = /^\s*'([^']+)'\s*\((.*)\)\s*$/.exec(line);
-        if (m) list.push({ id: m[1], name: m[2] });
-      }
-      resolve(list);
-    });
-  })));
+  r.get('/audio-devices', wrap(() => {
+    const audioDevices = require('../lib/audio-devices');
+    const list = audioDevices.cards();
+    return { devices: list.map((c) => ({ id: c.id, name: `${c.name}${c.usb ? ' (USB)' : ''}` })), auto: audioDevices.resolve('auto', list).name };
+  }));
   // Schedules run in local time, so the timezone matters.
   r.get('/timezone', wrap(() => new Promise((resolve) => {
     execFile('timedatectl', ['list-timezones'], { timeout: 10000 }, (err, out) => {

@@ -108,9 +108,12 @@
       <div class="grid g2">
         <div class="card now" id="nowCard"></div>
         <div class="card">
-          <h3>Start a playlist</h3>
+          <h3>Play</h3>
           <div class="row">
-            <select id="dashPl">${LIB.playlists.map((n) => `<option>${esc(n)}</option>`).join('') || '<option value="">No playlists yet</option>'}</select>
+            <select id="dashPl" style="max-width:100%">${LIB.playlists.length || LIB.sequences.length ? '' : '<option value="">Nothing uploaded yet</option>'}
+              ${LIB.playlists.length ? `<optgroup label="Playlists">${LIB.playlists.map((n) => `<option value="pl:${esc(n)}">${esc(n)}</option>`).join('')}</optgroup>` : ''}
+              ${LIB.sequences.length ? `<optgroup label="Sequences">${LIB.sequences.map((s) => `<option value="seq:${esc(s.name)}">${esc(s.name.replace(/\.fseq$/i, ''))}</option>`).join('')}</optgroup>` : ''}
+            </select>
             <label class="inline"><input type="checkbox" id="dashRepeat" checked> Repeat</label>
             <button class="btn primary" id="dashStart">Start</button>
           </div>
@@ -121,9 +124,17 @@
       <div class="card"><h3>Timing</h3><div class="stats" id="timing"></div>
         <p class="dim" style="margin:10px 0 0">Lights follow the audio clock. "Late" is how far after its due time a frame left; frames are never queued, a late wake-up skips straight to the right frame.</p></div>`;
     $('#dashStart').onclick = guard(async () => {
-      const n = $('#dashPl').value; if (!n) return;
-      await api('POST', P('/play'), { playlist: n, repeat: $('#dashRepeat').checked });
-      toast(`Started ${n}`);
+      const v = $('#dashPl').value; if (!v) return;
+      const repeat = $('#dashRepeat').checked;
+      if (v.startsWith('pl:')) {
+        await api('POST', P('/play'), { playlist: v.slice(3), repeat });
+      } else {
+        // A standalone sequence plays with the audio named inside it, if that file is here.
+        const s = LIB.sequences.find((x) => x.name === v.slice(4));
+        const media = s && s.mediaFilename && [...LIB.music, ...LIB.videos].some((m) => m.name === s.mediaFilename) ? s.mediaFilename : undefined;
+        await api('POST', P('/play'), { sequence: v.slice(4), media, repeat });
+      }
+      toast(`Playing ${v.slice(v.indexOf(':') + 1)}`);
     });
     renderNow();
   };
@@ -164,7 +175,7 @@
     if (t) t.innerHTML = [
       ['Clock', p.clock], ['Frames/s', w.fps ?? 0], ['Avg late', `${w.avgLateMs ?? 0} ms`], ['Max late (1 s)', `${w.maxLateMs ?? 0} ms`],
       ['Late >20 ms (song)', w.total ? `${w.total.over20} of ${w.total.frames}` : '0'], ['Block decode', `${w.maxDecodeMs ?? 0} ms`],
-      ['Display', p.display], ['MultiSync', STATUS.multisync.sending ? 'sending' : STATUS.mode === 'remote' ? `following ${STATUS.multisync.lastMaster || '—'}` : 'off'],
+      ['Audio out', p.audioOut || '—'], ['Display', p.display], ['MultiSync', STATUS.multisync.sending ? 'sending' : STATUS.mode === 'remote' ? `following ${STATUS.multisync.lastMaster || '—'}` : 'off'],
     ].map(([k, v]) => `<div class="stat"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join('');
   }
 
@@ -591,13 +602,13 @@
   // ---------------------------------------------------------------- system
   PAGES.system = async (el) => {
     await loadConfig();
-    const [devices, auth, tz] = await Promise.all([api('GET', P('/audio-devices')).catch(() => []), api('GET', P('/auth')), api('GET', P('/timezone')).catch(() => ({ current: '', zones: [] }))]);
+    const [ad, auth, tz] = await Promise.all([api('GET', P('/audio-devices')).catch(() => ({ devices: [], auto: '' })), api('GET', P('/auth')), api('GET', P('/timezone')).catch(() => ({ current: '', zones: [] }))]);
     el.innerHTML = `
       <div class="grid g2">
         <div class="card"><h3>Player</h3><div class="stack">
           <label>Name on the network <input id="host" value="${esc(CONFIG.hostName)}"></label>
           <label>Description <input id="desc" value="${esc(CONFIG.hostDescription)}"></label>
-          <label>Audio output <select id="adev"><option value="auto">Automatic</option>${devices.map((d) => `<option value="${esc(d.id)}" ${d.id === CONFIG.audioDevice ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select></label>
+          <label>Audio output <select id="adev"><option value="auto">Automatic — ${esc(ad.auto || 'USB card if present')}</option>${ad.devices.map((d) => `<option value="${esc(d.id)}" ${d.id === CONFIG.audioDevice ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select></label>
           <label>Timezone (schedules use local time) <select id="tz">${tz.zones.map((z) => `<option ${z === tz.current ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select></label>
           <p class="dim">There is no volume control on purpose: set the level once at your amplifier or transmitter.</p>
           <button class="btn primary" id="saveSys">Save</button></div></div>
