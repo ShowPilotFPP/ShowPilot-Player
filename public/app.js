@@ -335,12 +335,13 @@
         </div>
         <div class="pl-opts">
           <label class="inline"><span class="switch"><input type="checkbox" id="plRepeat" ${pl.repeat ? 'checked' : ''}><span></span></span> Repeat main</label>
-          <label class="inline"><span class="switch"><input type="checkbox" id="plRandom" ${pl.random ? 'checked' : ''}><span></span></span> Shuffle</label>
+          <label class="inline" title="Play the main items in a new random order on every loop"><span class="switch"><input type="checkbox" id="plRandom" ${pl.random ? 'checked' : ''}><span></span></span> Shuffle each loop</label>
           <label class="inline" ${pl.repeat ? 'hidden' : ''}>Play main <input type="number" id="plLoops" min="1" max="999" value="${Math.max(1, pl.loopCount || 1)}" style="width:70px"> time(s)</label>
         </div>
         ${SECTIONS.map(([k, title, hint]) => `
           <div class="pl-sec" data-section="${k}">
             <div class="pl-sec-head"><b>${title}</b> <span class="dim">${hint}</span><span class="spacer"></span>
+              ${k === 'mainPlaylist' && pl.mainPlaylist.length > 1 ? '<button class="btn small" id="plShuffleNow" title="Put the main items in a new random order now (saved)"><i class="fas fa-shuffle"></i> Randomize order</button>' : ''}
               ${k === 'mainPlaylist' && LIB.sequences.length ? '<button class="btn small" id="plFill"><i class="fas fa-wand-magic-sparkles"></i> Add all sequences</button>' : ''}
               <button class="btn small" data-add="${k}"><i class="fas fa-plus"></i> Add</button></div>
             <div class="pl-rows" data-drop="${k}">${pl[k].map((e, i) => itemRow(e, k, i)).join('') || `<div class="pl-empty" data-drop-empty="${k}">${k === 'mainPlaylist' ? 'Add sequences here.' : 'Empty'}</div>`}</div>
@@ -401,6 +402,16 @@
       $('#plRepeat').onchange = (ev) => { pl.repeat = ev.target.checked ? 1 : 0; save(); renderEditor(); };
       $('#plRandom').onchange = (ev) => { pl.random = ev.target.checked ? 1 : 0; save(); };
       $('#plLoops').onchange = (ev) => { pl.loopCount = Math.max(1, +ev.target.value || 1); save(); };
+      // One-off reorder of Main (unlike the Shuffle switch, which reshuffles every loop while playing).
+      if ($('#plShuffleNow')) $('#plShuffleNow').onclick = () => {
+        const list = pl.mainPlaylist;
+        const before = list.map((e) => JSON.stringify(e)).join('|');
+        for (let tries = 0; tries < 5; tries++) {
+          for (let i = list.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [list[i], list[j]] = [list[j], list[i]]; }
+          if (list.map((e) => JSON.stringify(e)).join('|') !== before) break; // make sure the order visibly changes
+        }
+        openItem = null; save(); renderEditor(); toast('Main order randomized');
+      };
       if ($('#plFill')) $('#plFill').onclick = () => {
         const have = new Set(pl.mainPlaylist.map((e) => e.sequenceName));
         let n = 0;
@@ -527,7 +538,7 @@
       <div class="card"><div class="drop" id="drop">Drop .fseq, audio, video or script files here, or <label class="inline" style="display:inline;color:var(--blue);cursor:pointer"><u>choose files</u><input type="file" id="pick" multiple hidden></label>
         <div class="progress" id="upProg"></div></div>
         <p class="dim" style="margin:10px 0 0">xLights can also upload straight to this player: add it in FPP Connect like any FPP.</p></div>
-      ${tbl('Sequences', LIB.sequences.map((s) => `<tr><td>${esc(s.name)}</td><td>${s.error ? `<span class="pill bad">${esc(s.error)}</span>` : esc(s.mediaFilename || '—')}</td><td class="num">${fmt(s.durationMs)}</td><td class="num">${s.stepMs ? Math.round(1000 / s.stepMs) + ' fps' : ''}</td><td class="num">${s.maxChannel ? s.maxChannel.toLocaleString() + ' ch' : ''}</td><td class="row end"><button class="btn small" data-play-seq="${esc(s.name)}" data-media="${esc(s.mediaFilename || '')}">Play</button><button class="btn small danger" data-del="sequences/${esc(s.name)}">Delete</button></td></tr>`).join(''), '<th>Name</th><th>Media</th><th class="num">Length</th><th class="num">Rate</th><th class="num">Channels</th><th></th>')}
+      ${tbl('Sequences', LIB.sequences.map((s) => `<tr><td>${esc(s.name)}</td><td>${s.error ? `<span class="pill bad">${esc(s.error)}</span>` : esc(s.mediaFilename || '—')}</td><td class="num">${fmt(s.durationMs)}</td><td class="num">${s.stepMs ? Math.round(1000 / s.stepMs) + ' fps' : ''}</td><td class="num">${s.maxChannel ? s.maxChannel.toLocaleString() + ' ch' : ''}${s.missing && s.missing.length ? `<br><span class="pill warn" title="This file has no channel data for these outputs. Upload it again from xLights FPP Connect.">No data for ${esc(s.missing.join(', '))}</span>` : ''}</td><td class="row end"><button class="btn small" data-play-seq="${esc(s.name)}" data-media="${esc(s.mediaFilename || '')}">Play</button><button class="btn small danger" data-del="sequences/${esc(s.name)}">Delete</button></td></tr>`).join(''), '<th>Name</th><th>Media</th><th class="num">Length</th><th class="num">Rate</th><th class="num">Channels</th><th></th>')}
       ${tbl('Audio', LIB.music.map((m) => `<tr><td>${esc(m.name)}</td><td class="num">${bytes(m.size)}</td><td class="row end"><button class="btn small danger" data-del="music/${esc(m.name)}">Delete</button></td></tr>`).join(''), '<th>Name</th><th class="num">Size</th><th></th>')}
       ${tbl('Video', LIB.videos.map((m) => `<tr><td>${esc(m.name)}</td><td class="num">${bytes(m.size)}</td><td class="row end"><button class="btn small danger" data-del="videos/${esc(m.name)}">Delete</button></td></tr>`).join(''), '<th>Name</th><th class="num">Size</th><th></th>')}`;
     const drop = $('#drop');

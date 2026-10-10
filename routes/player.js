@@ -95,6 +95,7 @@ module.exports = function playerRoutes(ctx) {
         ...(config.get().outputs || []).some((o) => o.enabled !== false) ? [] : ['No controller outputs are set up, so no lights are sent. Add them on Outputs, or in xLights FPP Connect set this player\'s "UDP Out" to "All".'],
         ...require('../lib/health').missing().map((d) => `${d.bin} is not installed (${d.why}). Run System → System software to install it.`),
         ...(player.problems || []),
+        ...(player.state === 'playing' ? (player.seqProblems || []) : []),
       ],
     };
   }));
@@ -167,7 +168,12 @@ module.exports = function playerRoutes(ctx) {
   r.get('/library', wrap(() => {
     const ls = (k) => { try { return fs.readdirSync(paths.dir(k)).filter((f) => !f.startsWith('.') && !f.endsWith('.part')).sort(); } catch { return []; } };
     const sequences = ls('sequences').filter((f) => /\.fseq$/i.test(f)).map((name) => {
-      try { const i = probe(paths.fileIn('sequences', name)); return { name, ...i }; } catch (e) { return { name, error: e.message }; }
+      try {
+        const i = probe(paths.fileIn('sequences', name));
+        const missing = require('../lib/fseq').uncoveredOutputs(config.get().outputs, i.ranges).map((m) => m.description);
+        delete i.ranges;
+        return { name, ...i, missing };
+      } catch (e) { return { name, error: e.message }; }
     });
     const size = (k, f) => { try { return fs.statSync(paths.fileIn(k, f)).size; } catch { return 0; } };
     return {

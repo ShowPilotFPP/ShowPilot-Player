@@ -155,3 +155,17 @@ test('fseq media name from xLights is reduced to the file name (Windows or Mac p
     r.close();
   }
 });
+
+test('sparse sequences: outputs whose channels the file lacks are reported', () => {
+  const { uncoveredOutputs } = require('../lib/fseq');
+  const outs = [
+    { type: 'ddp', description: 'Falcon', startChannel: 1, channelCount: 2044 },
+    { type: 'e131', description: 'Rack', startChannel: 2555, universeCount: 1, universeSize: 510 },
+    { type: 'ddp', description: 'Matrix', startChannel: 3065, channelCount: 172800 },
+    { type: 'e131', enabled: false, description: 'Off', startChannel: 176375, universeSize: 510 },
+  ];
+  // Uploaded before the matrix output existed: only the first ranges are in the file.
+  assert.deepEqual(uncoveredOutputs(outs, [[0, 2044], [2554, 510]]).map((m) => m.description), ['Matrix']);
+  assert.equal(uncoveredOutputs(outs, [[0, 2044], [2554, 510], [3064, 86400]])[0].covered, 0.5);
+  assert.deepEqual(uncoveredOutputs(outs, [[0, 175864]]), []);
+});
