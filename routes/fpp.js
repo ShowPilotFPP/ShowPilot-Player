@@ -363,7 +363,8 @@ module.exports = function fppRoutes(ctx) {
     res.json(row);
   });
   r.get('/scripts', (req, res) => res.json(listDir('scripts')));
-  r.get('/playlists/playable', (req, res) => res.json(playlists.list().filter((n) => !n.startsWith('_'))));
+  // Like FPP: playlists, then .fseq sequence files (playlist commands accept both).
+  r.get('/playlists/playable', (req, res) => res.json([...playlists.list().filter((n) => !n.startsWith('_')), ...listDir('sequences', (f) => /\.fseq$/i.test(f)).sort()]));
   r.get('/commands/:name', (req, res) => {
     const c = commands.get(req.params.name);
     if (!c) return res.status(404).json({ status: 'not found' });

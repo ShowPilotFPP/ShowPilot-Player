@@ -206,3 +206,12 @@ test('review fixes: malformed backup fields do not block the rest', () => {
   assert.equal(r.meta.taken, null);
   assert.ok(r.sections.some((s) => s.id === 'playlists'));
 });
+
+test('playlist commands accept a sequence file name, as FPP does', () => {
+  fs.writeFileSync(paths.fileIn('sequences', 'Indoor Lightning.fseq'), Buffer.alloc(32));
+  const pl = playlists.loadPlayable('Indoor Lightning.fseq');
+  assert.ok(pl, 'a .fseq name resolves to a one-item playlist');
+  assert.equal(pl.mainPlaylist[0].sequenceName, 'Indoor Lightning.fseq');
+  assert.equal(playlists.loadPlayable('Nope.fseq'), null);
+  assert.equal(playlists.loadPlayable('No Such Playlist'), null);
+});
