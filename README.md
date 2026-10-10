@@ -21,7 +21,7 @@ It is an alternative to FPP for shows that drive their pixels over the network. 
 
 ### Flash an SD card (recommended)
 
-1. Download `ShowPilot-Player-<version>-arm64.img.xz` from the [latest release](https://github.com/ShowPilotFPP/ShowPilot-Player/releases).
+1. Download `ShowPilot-Player-<version>-arm64.img.xz` from the [releases page](https://github.com/ShowPilotFPP/ShowPilot-Player/releases) (the newest release that has one attached; images are only rebuilt when the system part changes, and the player updates itself after you boot it).
 2. Flash it with Raspberry Pi Imager ("Use custom"). In the OS customisation step set your user, password, Wi-Fi (if not wired) and **timezone**.
 3. Boot a Raspberry Pi 4 or 5 and open `http://showpilot.local/` (or the Pi's IP address).
 
@@ -33,7 +33,13 @@ Default login on the image if you skip customisation: user `showpilot`, password
 curl -fsSL https://raw.githubusercontent.com/ShowPilotFPP/ShowPilot-Player/main/scripts/install.sh | sudo bash
 ```
 
-Run the same command again to update, or use **System → Updates** in the web UI.
+## Updating (no reflashing)
+
+- **System → Updates** installs new ShowPilot Player releases in seconds, with one-click rollback.
+- **System → System software** updates Raspberry Pi OS packages, mpv, ffmpeg, PHP and Node.js in place (the show must be stopped; reboots only if a new kernel needs it).
+- Re-running the install command above does the same from a terminal.
+
+You only flash a card once.
 
 ## First show
 

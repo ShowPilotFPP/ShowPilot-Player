@@ -602,6 +602,9 @@
           <div class="row"><input type="password" id="pw" placeholder="New password (6+ characters)" autocomplete="new-password"><button class="btn" id="setPw">Set</button>${auth.required ? '<button class="btn danger" id="clrPw">Remove</button><button class="btn" id="logout">Sign out</button>' : ''}</div>
           <p class="dim">xLights and FPP plugins use the FPP-compatible API, which stays open like on FPP.</p></div>
         <div class="card"><h3>Updates</h3><div id="upd" class="muted">Checking…</div></div>
+        <div class="card"><h3>System software</h3><div id="sysUpd" class="muted">Raspberry Pi OS packages, mpv, ffmpeg, PHP and Node.js. Updated in place, no reflashing.</div>
+          <div class="row" style="margin-top:10px"><button class="btn" id="sysChk">Check</button><button class="btn primary" id="sysRun">Update system software</button></div>
+          <pre class="logs mono" id="sysLog" hidden style="margin-top:10px;max-height:260px"></pre></div>
         <div class="card"><h3>Power</h3><div class="row"><button class="btn" data-sys="restart">Restart player</button><button class="btn" data-sys="reboot">Reboot</button><button class="btn danger" data-sys="shutdown">Shut down</button></div>
           <p class="dim">Restart applies audio device, display and matrix changes.</p></div>
       </div>
@@ -614,6 +617,36 @@
     if ($('#clrPw')) $('#clrPw').onclick = guard(async () => { if (!confirm('Remove the admin password?')) return; await api('POST', P('/auth/password'), { password: '' }); toast('Password removed'); PAGES.system(el); });
     if ($('#logout')) $('#logout').onclick = guard(async () => { await api('POST', P('/auth/logout')); location.reload(); });
     $$('[data-sys]', el).forEach((b) => (b.onclick = guard(async () => { if (!confirm(`${b.textContent}?`)) return; await api('POST', P(`/system/${b.dataset.sys}`)); toast(`${b.textContent} requested`); })));
+    // System software update: check, run, then follow the log until it finishes.
+    const sysShow = (st) => {
+      const box = $('#sysUpd'), lg = $('#sysLog');
+      if (!box) return;
+      if (st.log && st.log.length) { lg.hidden = false; lg.textContent = st.log.join('\n'); lg.scrollTop = 1e9; }
+      if (st.running) box.innerHTML = `<span class="pill warn">${esc(st.phase)}…</span>`;
+      else if (st.ok === true) box.innerHTML = st.rebootRequired ? '<span class="pill warn">Updated — reboot to finish</span> <button class="btn small" id="sysReboot">Reboot now</button>'
+        : st.restartNeeded ? '<span class="pill ok">Updated — player restarting</span>' : '<span class="pill ok">Up to date</span>';
+      else if (st.ok === false) box.innerHTML = `<span class="pill bad">Failed</span> ${esc(st.error)}`;
+      if ($('#sysReboot')) $('#sysReboot').onclick = guard(async () => { await api('POST', P('/system/reboot')); toast('Rebooting'); });
+      $('#sysRun').disabled = !!st.running; $('#sysChk').disabled = !!st.running;
+    };
+    const sysPoll = async () => {
+      try { const st = await api('GET', P('/system-update')); sysShow(st); if (st.running && current === 'system') setTimeout(sysPoll, 1500); }
+      catch { if (current === 'system') setTimeout(sysPoll, 3000); } // the player may be restarting
+    };
+    $('#sysChk').onclick = guard(async () => {
+      $('#sysUpd').textContent = 'Checking… (about a minute)'; $('#sysChk').disabled = true;
+      try {
+        const c = await api('POST', P('/system-update/check'));
+        const n = c.packages.length;
+        $('#sysUpd').innerHTML = `${n ? `<b>${n}</b> package${n === 1 ? '' : 's'} can be updated` : 'All packages are current'} · Node.js ${esc(c.node.current)}${c.node.updateAvailable ? ` → <b>${esc(c.node.latest)}</b>` : c.node.latest ? ' (current)' : ' (couldn\'t check for a newer version)'}${c.error ? `<br><span class="err">${esc(c.error)}</span>` : ''}`;
+      } finally { $('#sysChk').disabled = false; }
+    });
+    $('#sysRun').onclick = guard(async () => {
+      if (!confirm('Update system software now? It can take several minutes; the show must be stopped.')) return;
+      sysShow(await api('POST', P('/system-update')));
+      setTimeout(sysPoll, 1500);
+    });
+    sysPoll();
     const loadLog = guard(async () => { const r = await api('GET', P('/logs?n=400')); $('#log').textContent = r.lines.join('\n'); $('#log').scrollTop = 1e9; });
     $('#refLog').onclick = loadLog;
     loadLog();

@@ -1,6 +1,8 @@
-# Build the flashable Raspberry Pi SD card image for a release and attach it
-# to that GitHub Release. Runs automatically when ShipPilot publishes a
-# release; can also be run by hand for any existing tag.
+# Build the flashable Raspberry Pi SD card image and attach it to a GitHub
+# Release. Building takes about an hour, so on a normal release it only runs
+# when the image recipe changed (image/, the service file); app-only releases
+# reach players through the in-app updater and need no new image. Run it by
+# hand ("Run workflow", give a tag) to build an image for any release.
 name: Build SD card image
 
 on:
@@ -26,19 +28,35 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+          fetch-depth: 0
+
+      - name: Does this release need a new image?
+        run: |
+          BUILD=true
+          if [ "${{ github.event_name }}" = "release" ]; then
+            PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+            if [ -n "$PREV" ] && git diff --quiet "$PREV" "$TAG" -- image/ scripts/showpilot-player.service; then
+              BUILD=false
+              echo "::notice::Image recipe unchanged since $PREV, so no new image. Players update in place (System -> Updates). Run this workflow by hand to build one anyway."
+            fi
+          fi
+          echo "BUILD=$BUILD" >> "$GITHUB_ENV"
 
       - name: Free disk space (pi-gen needs ~15 GB)
+        if: env.BUILD == 'true'
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
           df -h /
 
       - name: Enable arm64 emulation
+        if: env.BUILD == 'true'
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
 
       - name: Build image
+        if: env.BUILD == 'true'
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q binfmt-support qemu-user-static
           sudo install -d -o "$USER" /mnt/spp-pigen
@@ -46,6 +64,7 @@ jobs:
           ls -lh image/out
 
       - name: Attach to the release
+        if: env.BUILD == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$TAG" image/out/*.img.xz image/out/*.sha256 --clobber

@@ -178,6 +178,14 @@ module.exports = function playerRoutes(ctx) {
   r.post('/multisync/discover', wrap(() => { multisync.ping(true); return { ok: true }; }));
 
   // ------------------------------------------------------------ system
+  // System software (OS packages + Node.js) without reflashing.
+  const osUpdate = require('../lib/os-update');
+  r.get('/system-update', wrap(() => osUpdate.status()));
+  r.post('/system-update/check', wrap(() => osUpdate.check()));
+  r.post('/system-update', wrap(() => osUpdate.start({
+    isShowRunning: () => player.state === 'playing' || show.isRunning(),
+    onRestart: () => { log.info('system', 'restarting after a system update'); process.exit(0); },
+  })));
   r.get('/updates', wrap(async (req) => ({ ...(await updater.check(req.query.force === '1')), canRollback: updater.canRollback() })));
   r.post('/updates/apply', wrap(() => updater.apply((m) => log.info('updater', m))));
   r.post('/updates/rollback', wrap(() => updater.rollback()));

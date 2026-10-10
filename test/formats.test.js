@@ -125,3 +125,15 @@ test('matrix map follows xLights start corner and serpentine', () => {
   const px = renderMatrix(g, Buffer.from([10, 20, 30]), Buffer.alloc(3));
   assert.deepEqual([...px], [20, 10, 30]);
 });
+
+test('system update: parse apt upgradable list and compare versions', () => {
+  const { parseUpgradable, cmpVersion } = require('../lib/os-update');
+  const out = 'Listing...\nmpv/stable 0.40.0-3 arm64 [upgradable from: 0.40.0-2]\nlibc6/stable-security 2.41-12+deb13u1 arm64 [upgradable from: 2.41-12]\n';
+  assert.deepEqual(parseUpgradable(out), [
+    { name: 'mpv', to: '0.40.0-3', from: '0.40.0-2' },
+    { name: 'libc6', to: '2.41-12+deb13u1', from: '2.41-12' },
+  ]);
+  assert.ok(cmpVersion('22.21.0', '22.15.1') > 0);
+  assert.ok(cmpVersion('v22.9.0', '22.10.0') < 0);
+  assert.equal(cmpVersion('22.1.0', '22.1.0'), 0);
+});

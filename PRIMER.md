@@ -2,7 +2,7 @@
 
 Context for anyone (usually Claude) working on ShowPilot Player. Read this before changing code. It supersedes the earlier concept primer that lived outside the repo.
 
-**Status: v0.1.1, first build.** Everything below is implemented and covered by tests in a Linux dev environment with mpv on a null audio device. It has **not yet run on a Raspberry Pi**, driven real controllers, played to HDMI, or been built into an SD image (the image workflow runs on GitHub). The Phase 1 measurements below are the next step.
+**Status: v0.1.2, first build.** Everything below is implemented and covered by tests in a Linux dev environment with mpv on a null audio device. It has **not yet run on a Raspberry Pi**, driven real controllers, played to HDMI, or been built into an SD image (the image workflow runs on GitHub). The Phase 1 measurements below are the next step.
 
 ---
 
@@ -188,7 +188,10 @@ Wire-compatible with the ShowPilot server's plugin API; the server cannot tell i
 - Hostname `showpilot` (reachable as `showpilot.local` via avahi). Timezone default America/Chicago in the image; set yours in Imager or **System → Timezone** (schedules run in local time).
 - `scripts/install.sh`: same result on an existing 64-bit Pi OS; refuses to run where FPP is installed; re-run to update.
 - In-app updater: highest semver tag from the GitHub releases list → download tag tarball → `npm install --omit=dev` in `/opt/showpilot-player.next` → swap (keep `.previous`) → exit (systemd restarts). One-step rollback.
-- `.github/workflows/build-image.yml` builds the image when a release is published (ShipPilot creates releases with a PAT, which triggers workflows) and attaches it; can also run by hand for a tag. **Not yet run.**
+- **Updates never need a reflash** (maintainer decision 2026-10: the hour-long image build per release was unacceptable). Two layers, like FPP:
+  - **App** — System → Updates (`lib/updater.js`): release tarball, `npm install`, folder swap, restart; seconds; one-step rollback.
+  - **System software** — System → System software (`lib/os-update.js`, FPP's "OS upgrade" equivalent): `apt-get update`, `full-upgrade` (keeping existing config files), installs the player's package list, `autoremove`, then Node.js within major 22 (checksum-verified, files replaced with `cp --remove-destination` so the running binary is safe). Background job with a polled log; refused while a show is running; restarts the player when anything was installed; reports when `/run/reboot-required` exists. The package list lives in three places that must match: `lib/os-update.js` `PACKAGES`, `scripts/install.sh`, `image/stage-showpilot/00-packages-nr`.
+- `.github/workflows/build-image.yml`: on a published release it builds **only if `image/` or `scripts/showpilot-player.service` changed since the previous tag** (otherwise it finishes in seconds with a notice). "Run workflow" with a tag builds one regardless. The image is for first installs only.
 
 ---
 
@@ -237,6 +240,7 @@ Also verified by hand in the dev environment (v0.1.0):
 | Version | Change | Checked |
 |---|---|---|
 | 0.1.0 | First build (independent code review before release fixed plugin-name traversal, CGI crash, concurrent player transitions, pip option names, command-arg decoding and scheduler pruning): audio-clocked fseq playback with PLL-disciplined clock and exact resume; DDP/E1.31; playlists, inserts, scheduler with dusk/sunset; MultiSync master/remote + discovery; video and virtual matrix via a display mpv; xLights FPP Connect API; FPP script/PHP plugin host with `/opt/fpp` shim; built-in ShowPilot client and audio daemon; admin UI with optional password, timezone, updater; pi-gen image pipeline, install script, ShipPilot/test/image workflows. | 21 automated tests; manual runs against mpv (null audio), crafted MultiSync packets, and a local ShowPilot server. Not yet run on a Pi. |
+| 0.1.2 | System → System software: update Raspberry Pi OS packages, mpv, ffmpeg, PHP and Node.js in place (no reflash), with live log, show-running guard, auto restart and reboot prompt. SD image only rebuilds when the image recipe changes (or by hand), instead of an hour-long build on every release. | Tests pass (22); apt check run on a Linux box; workflow YAML validated. |
 | 0.1.1 | Fixes from the first GitHub runs. Dusk/sunset times were wrong when the system timezone differed from the show location's (e.g. a Pi left on UTC): events are now placed within 12 h of the location's solar noon, independent of the system zone. SD image build failed because the empty `stage-showpilot/01-app/files/` folder isn't stored in git; `image/build.sh` now creates it. CI runs the tests in two timezones. | Tests pass under UTC, America/Chicago and Pacific/Auckland; image script runs through to the Docker build. |
 
 ---
