@@ -142,6 +142,7 @@ async function main() {
     if (stopping) return;
     stopping = true;
     log.info('main', `${sig}: shutting down`);
+    try { plugins.stopPorts(); } catch {}
     try { await plugins.hook('preStop'); } catch {}
     try { await presetRunner.trigger('FPPD_STOPPED'); } catch {}
     scheduler.stop();

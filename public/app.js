@@ -1240,7 +1240,8 @@
       const others = pages.filter((x) => x !== main);
       const badges = [
         p.deprecated ? '<span class="pill warn">Deprecated</span>' : '',
-        p.native ? '<span class="pill warn" title="This plugin has a part that runs inside FPP\'s fppd. That part can\'t run in ShowPilot Player.">Native part can\'t run here</span>' : '',
+        p.native && p.ported ? '<span class="pill ok" title="This plugin\'s C++ part (made for FPP\'s fppd) is rebuilt in ShowPilot Player, so the whole plugin works here.">Runs natively in ShowPilot Player</span>'
+          : p.native ? '<span class="pill warn" title="This plugin has a part that runs inside FPP\'s fppd. That part can\'t run in ShowPilot Player.">Native part can\'t run here</span>' : '',
         p.hooks && p.hooks.includes('postStart') ? '<span class="pill" title="Starts a background task when the player starts">Runs in background</span>' : '',
         p.commands && p.commands.length ? `<span class="pill" title="${esc(p.commands.join(', '))}">${p.commands.length} command${p.commands.length === 1 ? '' : 's'}</span>` : '',
       ].join('');

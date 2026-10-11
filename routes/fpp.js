@@ -406,6 +406,16 @@ module.exports = function fppRoutes(ctx) {
   r.post('/command', jsonBody, (req, res) => runCmd(res, req.body && req.body.command, (req.body && req.body.args) || []));
 
   // ------------------------------------------------------------ plugins
+  // Native (C++) plugins' own APIs, answered by their ShowPilot Player port
+  // (lib/native). FPP serves these from fppd at /api/plugin-apis/<prefix>/...
+  r.all(/^\/plugin-apis\/([^/]+)\/?(.*)$/, text, async (req, res) => {
+    const port = plugins.apiPort(req.params[0]);
+    if (!port) return res.status(404).json({ error: 'Not found' });
+    try {
+      const [code, body] = await port.handle(req.method, String(req.params[1] || '').split('/').filter(Boolean).map(decodeURIComponent), req.body);
+      res.status(code).json(body);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
   r.get('/plugin', (req, res) => res.json(plugins.list().map((p) => p.name)));
   r.post('/fppd/plugin/:dir/:action', async (req, res) => {
     const { dir, action } = req.params;
