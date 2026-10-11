@@ -224,3 +224,29 @@ test('sender thread paces each controller like FPP (90 Mbit/s) and finishes with
   set.close();
   rx.close();
 });
+
+test('paced frames keep a steady cadence: PUSH packets one frame time apart despite jittery hand-over', async () => {
+  const dgram = require('dgram');
+  const { OutputSet } = require('../lib/outputs');
+  const rx = dgram.createSocket('udp4');
+  await new Promise((r) => rx.bind(0, '127.0.0.1', r));
+  const port = rx.address().port;
+  const push = [];
+  rx.on('message', (m) => { if (m[0] === 0x41) push.push(Number(process.hrtime.bigint()) / 1e6); });
+  const set = new OutputSet([{ type: 'ddp', ip: '127.0.0.1', startChannel: 1, channelCount: 1440 * 60 }]);
+  set.outputs[0].send = function (sock) { for (const p of this.packets) sock.send(p, port, '127.0.0.1'); };
+  const frame = Buffer.alloc(1440 * 60);
+  const jitter = [3, -3, 2, -2, 3, 0, -3, 1, 3, -2, 2, -3, 0, 3, -1, 2, -3, 3, -2, 1, 0, 2, -3, 3];
+  const t0 = performance.now() + 20;
+  for (let i = 0; i < jitter.length; i++) {
+    await new Promise((r) => setTimeout(r, Math.max(0, t0 + i * 50 + jitter[i] - performance.now())));
+    set.send(frame, 50);
+  }
+  await new Promise((r) => setTimeout(r, 120));
+  const iv = push.slice(1).map((t, i) => t - push[i]).slice(2);
+  const off = iv.filter((x) => Math.abs(x - 50) > 1.5);
+  assert.ok(iv.length >= 18, `pushes: ${push.length}`);
+  assert.ok(off.length <= 2, `intervals off by >1.5 ms: ${off.map((x) => x.toFixed(1)).join(', ')}`);
+  set.close();
+  rx.close();
+});
