@@ -91,6 +91,7 @@ module.exports = function playerRoutes(ctx) {
       multisync: { sending: multisync.isSending(), lastMaster: multisync.stats.lastMaster, systems: multisync.systems.size },
       ips: ifaces().map((i) => i.address),
       pluginRestart: plugins.restartFlag() > 0,
+      rebootNeeded: plugins.rebootFlag() > 0,
       problems: [
         ...(config.get().outputs || []).some((o) => o.enabled !== false) ? [] : ['No controller outputs are set up, so no lights are sent. Add them on Outputs, or in xLights FPP Connect set this player\'s "UDP Out" to "All".'],
         ...require('../lib/health').missing().map((d) => `${d.bin} is not installed (${d.why}). Run System → System software to install it.`),

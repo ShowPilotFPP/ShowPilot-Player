@@ -108,11 +108,15 @@
     if (!el) return;
     var r = parseInt(window.settings.restartFlag || 0, 10), b = parseInt(window.settings.rebootFlag || 0, 10);
     if (!r && !b) { el.innerHTML = ''; return; }
-    el.innerHTML = '<span class="spp-flag">' + (b ? 'A reboot is needed' : 'Restart plugins to apply') + '</span> <button type="button" class="btn btn-sm btn-warning" id="spp-restart-btn">' + (b ? 'Reboot' : 'Restart plugins') + '</button>';
+    el.innerHTML = '<span class="spp-flag">' + (b ? 'A plugin asked for a reboot' : 'Restart plugins to apply') + '</span> ' +
+      (b ? '<button type="button" class="btn btn-sm btn-outline-secondary" id="spp-flag-dismiss">Dismiss</button> ' : '') +
+      '<button type="button" class="btn btn-sm btn-warning" id="spp-restart-btn">' + (b ? 'Reboot' : 'Restart plugins') + '</button>';
+    var dis = document.getElementById('spp-flag-dismiss');
+    if (dis) dis.onclick = function () { putSetting('/api/settings/rebootFlag', 0).always(function () { window.settings.rebootFlag = 0; flagBanner(); }); };
     document.getElementById('spp-restart-btn').onclick = function () {
       this.disabled = true;
       fetch(b ? '/api/player/system/reboot' : '/api/player/plugins/restart', { method: 'POST' })
-        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); window.settings.restartFlag = 0; flagBanner(); toast(b ? 'Rebooting' : 'Plugins restarted'); })
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); if (b) window.settings.rebootFlag = 0; else window.settings.restartFlag = 0; flagBanner(); toast(b ? 'Rebooting' : 'Plugins restarted'); })
         .catch(function (e) { toast('Could not restart: ' + e.message, 'err'); });
     };
   }

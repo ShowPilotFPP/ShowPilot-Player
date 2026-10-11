@@ -135,6 +135,11 @@ async function main() {
   server.on('error', (e) => { log.error('main', `cannot listen on ${port}: ${e.message}`); process.exit(1); });
 
   await plugins.hook('postStart');
+  // Plugins just started fresh; and if the Pi booted minutes ago, the reboot a
+  // plugin asked for has happened.
+  const justBooted = require('os').uptime() < 600;
+  if (justBooted && plugins.rebootFlag()) log.info('plugins', 'cleared the reboot flag (the Pi has rebooted)');
+  plugins.clearFlags({ restart: true, reboot: justBooted });
   presetRunner.fire('FPPD_STARTED');
 
   let stopping = false;

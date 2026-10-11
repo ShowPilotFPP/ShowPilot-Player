@@ -1271,9 +1271,11 @@
 
     const render = () => {
       const restart = STATUS && STATUS.pluginRestart;
+      const reboot = STATUS && STATUS.rebootNeeded;
       const have = new Set(list.map((p) => p.name.toLowerCase()));
       const match = (x) => !q || `${x.displayName} ${x.name} ${x.description} ${x.author}`.toLowerCase().includes(q.toLowerCase());
       el.innerHTML = `
+        ${reboot ? `<div class="card notice row"><span><i class="fas fa-power-off"></i> A plugin asked for a reboot.</span><span class="spacer"></span><button class="btn small" id="pgRbDismiss">Dismiss</button><button class="btn primary small" id="pgReboot">Reboot</button></div>` : ''}
         ${restart ? `<div class="card notice row"><span><i class="fas fa-rotate"></i> A plugin setting changed that needs the plugins restarted.</span><span class="spacer"></span><button class="btn primary small" id="pgRestart">Restart plugins</button></div>` : ''}
         <div class="row tabs-row">
           <div class="seg"><button type="button" data-tab="installed" class="${tab === 'installed' ? 'on' : ''}">Installed (${list.length})</button><button type="button" data-tab="browse" class="${tab === 'browse' ? 'on' : ''}">Browse FPP plugins</button><button type="button" data-tab="url" class="${tab === 'url' ? 'on' : ''}">Install from URL</button></div>
@@ -1287,6 +1289,8 @@
         <div class="card" id="plLogCard" hidden><div class="row"><h3 style="margin:0" id="plLogTitle">Installing…</h3><span class="spacer"></span><button class="btn small" id="plLogClose">Close</button></div><pre class="logs mono" id="plLog"></pre></div>`;
       $$('[data-tab]', el).forEach((b) => (b.onclick = () => { tab = b.dataset.tab; render(); if (tab === 'browse' && !catalog) loadCatalog(); }));
       if ($('#pgQ')) $('#pgQ').oninput = (ev) => { q = ev.target.value; const pos = ev.target.selectionStart; render(); const i = $('#pgQ'); i.focus(); i.setSelectionRange(pos, pos); };
+      if ($('#pgReboot')) $('#pgReboot').onclick = guard(async () => { if (!(await ask('The show stops while the Pi restarts.', { title: 'Reboot?', ok: 'Reboot', danger: true }))) return; await api('POST', P('/system/reboot')); toast('Rebooting'); });
+      if ($('#pgRbDismiss')) $('#pgRbDismiss').onclick = guard(async () => { await fetch('/api/settings/rebootFlag', { method: 'PUT', headers: { 'Content-Type': 'text/plain' }, body: '0' }); if (STATUS) STATUS.rebootNeeded = false; render(); });
       if ($('#pgRestart')) $('#pgRestart').onclick = guard(async () => { $('#pgRestart').disabled = true; await api('POST', P('/plugins/restart')); toast('Plugins restarted'); if (STATUS) STATUS.pluginRestart = false; render(); });
       if ($('#plInstall')) $('#plInstall').onclick = () => doInstall($('#plUrl').value.trim(), $('#plBranch').value.trim());
       $$('[data-cat]', el).forEach((b) => (b.onclick = () => { b.disabled = true; doInstall(b.dataset.cat); }));
