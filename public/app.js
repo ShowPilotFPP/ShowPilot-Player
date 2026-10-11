@@ -1191,7 +1191,7 @@
     };
     $('#spSave').onclick = guard(async () => { await api('PUT', P('/showpilot'), collect()); toast('Saved'); PAGES.showpilot(el); });
     $('#spTest').onclick = guard(async () => { await api('PUT', P('/showpilot'), collect()); await api('POST', P('/showpilot/test')); toast('ShowPilot answered'); PAGES.showpilot(el); });
-    $('#spSync').onclick = guard(async () => { const r = await api('POST', P('/showpilot/sync')); toast(`Synced ${r.synced} songs${r.audio && r.audio.uploaded !== undefined ? `; audio: ${r.audio.uploaded} uploaded, ${r.audio.linked} linked` : ''}`); });
+    $('#spSync').onclick = guard(async () => { const r = await api('POST', P('/showpilot/sync')); toast(`Synced ${r.synced} songs${r.removed ? `, removed ${r.removed} no longer in the playlist` : ''}${r.audio && r.audio.uploaded !== undefined ? `; audio: ${r.audio.uploaded} uploaded, ${r.audio.linked} linked` : ''}`); });
     $$('[data-mode]', el).forEach((b) => (b.onclick = guard(async () => { await api('POST', P('/showpilot/mode'), { mode: b.dataset.mode }); toast(`Viewer mode ${b.dataset.mode}`); PAGES.showpilot(el); })));
   };
 

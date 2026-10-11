@@ -2,7 +2,7 @@
 
 Context for anyone (usually Claude) working on ShowPilot Player. Read this before changing code. It supersedes the earlier concept primer that lived outside the repo.
 
-**Status: v0.3.6.** Running on a Raspberry Pi 4B with real controllers and a USB sound card (0.1.6 timing measured there, see Testing). 0.2.0 adds FPP-style commands and command presets, a reworked scheduler (sequences, repeat-every, holidays) and FPP backup restore; those are covered by automated tests and a browser check, not yet used on a Pi. HDMI video/matrix and a full show night are still to check (Phase 1 list).
+**Status: v0.3.7.** Running on a Raspberry Pi 4B with real controllers and a USB sound card (0.1.6 timing measured there, see Testing). 0.2.0 adds FPP-style commands and command presets, a reworked scheduler (sequences, repeat-every, holidays) and FPP backup restore; those are covered by automated tests and a browser check, not yet used on a Pi. HDMI video/matrix and a full show night are still to check (Phase 1 list).
 
 ---
 
@@ -220,7 +220,7 @@ Wire-compatible with the ShowPilot server's plugin API; the server cannot tell i
 - Requests resolved **by name** in the live remote playlist (server index only a hint), converted to the FPP global index (lead-in offset included — the FPP plugin got this wrong).
 - Interrupt → `insertImmediate`; otherwise `insertAfterCurrent`.
 - Cooldowns from `playlistPatches` applied through the show runner's `skip` hook (never edits playlists).
-- Sync: `POST /api/plugin/sync-sequences` + audio-cache manifest/link/upload (audio files only; video-to-audio extraction not done yet).
+- Sync: `POST /api/plugin/sync-sequences` + audio-cache manifest/link/upload (audio files only; video-to-audio extraction not done yet). ShowPilot removes sequences not in the pushed list (v0.33.236+), so always push the whole playlist.
 - Bearer token in `media/plugindata/showpilot-player/showToken` (0600), never in config; `redirect: 'manual'` so the token never follows a redirect; server URL must be plain http(s).
 - Audio position daemon on `audioDaemonPort` (8090), only while ShowPilot is enabled: `GET /health`, `/status`, `/audio/<name>` (Range), WebSocket `position` (2 Hz), `syncPoint` (≤1/s; suppressed 1000 ms after a start, 300 ms after a resume), `heartbeat` (5 s), `timeReq` → `timeResp`. A resume's first message carries the real position.
 - FPP commands registered: "ShowPilot - Turn Viewer Control On/Off", "Switch to Voting/Jukebox/Race Mode", "Turn Interrupt Schedule On/Off".
@@ -316,6 +316,7 @@ Also verified by hand in the dev environment (v0.1.0):
 |---|---|---|
 | 0.3.5 | Matrix FPP still counted DDP errors with 24-packet bursts. Each frame is now spread over up to 40% of the frame time (≤ 20 ms) in 1 ms steps, with controllers' packets interleaved. | Test: 122 packets at 20 fps spread over ~20 ms, interleaved, in order, own copies, PUSH last; 39 tests pass. Not yet confirmed on the matrix FPP. |
 | 0.3.6 | Matrix FPP still counted DDP errors with 0.3.5. Output sending now paced per controller at 90 Mbit/s like FPP (`UDPPacingRate`), in its own thread with connected sockets; setting `outputPacingMbps` on the Outputs page; dashboard send stats. | Tests: batch building (own copies, order, PUSH, sync last) and a real paced send (60 packets over ≥5 ms); measured 120-packet frame over ~15 ms; 40 tests pass. Not yet confirmed on the matrix FPP. |
+| 0.3.7 | ShowPilot (v0.33.236 / Lite v0.5.75) now removes sequences that are no longer in the synced playlist; the Sync toast says how many were removed (`removed` from `sync-sequences`). | Tested against ShowPilot and Lite with a temp DB. |
 | 0.3.4 | Big DDP outputs (a matrix FPP) showed trailing lines: ~8.7% of packets lost at the receiver from 120-packet bursts. Packets are now sent from their own copies and paced in bursts of 24. | New test (paced, ordered, own copies, PUSH last, early flush); 39 tests pass. On the Pi: check the matrix FPP's DDP Errors column after Reset. |
 | 0.3.3 | Diagnosis for "an output gets no data" (seen with a DDP matrix FPP): sequences uploaded sparse before that output existed don't contain its channels. The player now says which outputs a sequence has no data for (log, Dashboard while playing, Files page). DDP offsets re-checked against FPP's DDP.cpp (type 4 raw = start-1, type 5 one-based = 0): unchanged and correct. | 38 tests pass (new: coverage check). |
 | 0.3.2 | Playlists: "Randomize order" button shuffles the Main items once and saves (the Shuffle switch is now labelled "Shuffle each loop"). | Checked in a browser: order changed and was saved; 37 tests pass. |
