@@ -250,3 +250,28 @@ test('paced frames keep a steady cadence: PUSH packets one frame time apart desp
   set.close();
   rx.close();
 });
+
+test('all controllers start together: a small controller is done early, not squeezed in at the end of a big frame', async () => {
+  const dgram = require('dgram');
+  const { OutputSet } = require('../lib/outputs');
+  const rx = dgram.createSocket('udp4');
+  await new Promise((r) => rx.bind(0, '127.0.0.1', r));
+  const port = rx.address().port;
+  const got = [];
+  rx.on('message', (m) => got.push({ t: Number(process.hrtime.bigint()) / 1e6, small: m.readUInt32BE(4) >= 1440 * 60 }));
+  const set = new OutputSet([
+    { type: 'ddp', ip: '127.0.0.1', startChannel: 1, channelCount: 1440 * 60 },          // "matrix"
+    { type: 'ddp', ip: '127.0.0.2', startChannel: 1440 * 60 + 1, channelCount: 1440 * 2 }, // "roofline"
+  ]);
+  for (const o of set.outputs) o.send = function (sock) { for (const p of this.packets) sock.send(p, port, '127.0.0.1'); };
+  const frame = Buffer.alloc(1440 * 62);
+  for (let i = 0; i < 4; i++) { set.send(frame, 50); await new Promise((r) => setTimeout(r, 50)); }
+  await new Promise((r) => setTimeout(r, 60));
+  const last = got.slice(-62);
+  const t0 = last[0].t, t1 = last[last.length - 1].t;
+  const smallDone = Math.max(...last.filter((x) => x.small).map((x) => x.t));
+  assert.equal(last.filter((x) => x.small).length, 2);
+  assert.ok(smallDone - t0 < (t1 - t0) * 0.3, `small controller done at ${(smallDone - t0).toFixed(1)} of ${(t1 - t0).toFixed(1)} ms`);
+  set.close();
+  rx.close();
+});
