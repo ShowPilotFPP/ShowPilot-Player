@@ -63,3 +63,47 @@ test('audio-clocked playback, pause and exact resume', { skip, timeout: 60000 },
     await p.close();
   }
 });
+
+test('a sequence replaced on disk (re-uploaded from xLights) plays its new data, not the old file\'s', { skip, timeout: 60000 }, async () => {
+  const dgram = require('dgram');
+  const paths = require('../lib/paths');
+  const { writeFseq } = require('../lib/fseq');
+  const config = require('../lib/config');
+  const { Player } = require('../lib/engine/player');
+  paths.ensureLayout();
+  config.load();
+  const STEP = 25, SECS = 3, cc = 600;
+  const make = (mark, fpb) => {
+    const frames = [];
+    for (let i = 0; i < (SECS * 1000) / STEP; i++) { const b = Buffer.alloc(cc, mark); b.writeUInt16BE(i, 0); frames.push(b); }
+    const f = paths.fileIn('sequences', 'r.fseq');
+    const tmp = f + '.new';
+    writeFseq(tmp, { channelCount: cc, frames, stepMs: STEP, framesPerBlock: fpb });
+    fs.renameSync(tmp, f); // like an upload: a new file under the same name
+  };
+  execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', `sine=frequency=440:duration=${SECS}`, paths.fileIn('music', 'r.mp3')]);
+  const rx = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+  await new Promise((r) => rx.bind(4048, '127.0.0.1', r));
+  let marks = [];
+  rx.on('message', (m) => { if (m.readUInt32BE(4) === 0 && m.length > 20) marks.push(m[20]); });
+  config.update({ outputs: [{ type: 'ddp', ip: '127.0.0.1', startChannel: 1, channelCount: cc }], outputPacingMbps: 90 });
+  const p = new Player(config);
+  await p.start();
+  try {
+    make(0x11, 10);
+    await p.play({ sequence: 'r.fseq', media: 'r.mp3' });
+    await wait(800);
+    await p.stop();
+    make(0x77, 7); // different data and a different block layout
+    marks = [];
+    await p.play({ sequence: 'r.fseq', media: 'r.mp3' });
+    await wait(1500);
+    const seen = marks.filter((x) => x !== 0);
+    const after = seen.slice(seen.indexOf(0x77)); // a frame of the first play may still be on its way
+    assert.ok(after.length > 20, `frames received: ${after.length}`);
+    assert.ok(after.every((x) => x === 0x77), `old data sent after the file was replaced: ${after.filter((x) => x !== 0x77).length} frames`);
+  } finally {
+    await p.close();
+    rx.close();
+  }
+});
