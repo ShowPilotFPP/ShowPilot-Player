@@ -92,6 +92,7 @@ module.exports = function playerRoutes(ctx) {
       ips: ifaces().map((i) => i.address),
       pluginRestart: plugins.restartFlag() > 0,
       rebootNeeded: plugins.rebootFlag() > 0,
+      screen: ctx.screen ? ctx.screen.status() : null,
       problems: [
         ...(config.get().outputs || []).some((o) => o.enabled !== false) ? [] : ['No controller outputs are set up, so no lights are sent. Add them under Lights → Controllers, or in xLights FPP Connect set this player\'s "UDP Out" to "All".'],
         ...require('../lib/health').missing().map((d) => `${d.bin} is not installed (${d.why}). Install it under Settings → Updates → System software.`),
@@ -124,6 +125,8 @@ module.exports = function playerRoutes(ctx) {
     await show.start(tmpName, { repeat: !!b.repeat });
     return outcome();
   }));
+  r.post('/screen/sleep', wrap(async () => { if (!ctx.screen) throw new Error('no screen'); const r = await ctx.screen.sleep('manual'); return { ok: true, result: r, status: ctx.screen.status() }; }));
+  r.post('/screen/wake', wrap(async () => { if (!ctx.screen) throw new Error('no screen'); const r = await ctx.screen.wake('manual'); return { ok: true, result: r, status: ctx.screen.status() }; }));
   r.post('/stop', wrap(async (req) => { if (req.body && req.body.graceful) show.stopGracefully(); else await show.stopNow(); return { ok: true }; }));
   r.post('/next', wrap(async () => { await show.next(); return { ok: true }; }));
   r.post('/prev', wrap(async () => { await show.prev(); return { ok: true }; }));

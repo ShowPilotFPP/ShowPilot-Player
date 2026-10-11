@@ -115,6 +115,13 @@ async function main() {
   scheduler.on('log', (m) => log.info('schedule', m));
   scheduler.enabled = config.get().mode !== 'remote';
   scheduler.start();
+
+  const { ScreenSleep } = require('./lib/screen-sleep');
+  const screen = new ScreenSleep({ config, player, scheduler, log: (m) => log.info('screen', m) });
+  ctx.screen = screen;
+  // A screen left switched off by a previous run comes back on at start.
+  if ((config.get().screenSleep || {}).enabled && (config.get().screenSleep.method || 'hdmi') === 'hdmi') screen._hdmi(true).catch(() => {});
+  screen.start();
   config.on('change', (c) => { scheduler.enabled = c.mode !== 'remote'; });
 
   // ------------------------------------------------------------ HTTP

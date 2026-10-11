@@ -355,7 +355,7 @@
       ['Late >20 ms (song)', w.total ? `${w.total.over20} of ${w.total.frames}` : '0'], ['Block decode', `${w.maxDecodeMs ?? 0} ms`],
       ['Output send', w.outputs && w.outputs.sender ? `${w.outputs.sender.maxSendMs.toFixed(1)} ms${w.outputs.pacingMbps ? ` @ ${w.outputs.pacingMbps} Mbit/s` : ' (unpaced)'}` : '—'],
       ['Output frames dropped', w.outputs ? w.outputs.droppedFrames : 0],
-      ['Audio out', p.audioOut || '—'], ['Display', p.display], ['MultiSync', STATUS.multisync.sending ? 'sending' : STATUS.mode === 'remote' ? `following ${STATUS.multisync.lastMaster || '—'}` : 'off'],
+      ['Audio out', p.audioOut || '—'], ['Display', p.display], ['Screen', STATUS.screen ? (STATUS.screen.asleep ? 'off (sleeping)' : STATUS.screen.enabled ? 'on' : 'on (no sleep)') : '—'], ['MultiSync', STATUS.multisync.sending ? 'sending' : STATUS.mode === 'remote' ? `following ${STATUS.multisync.lastMaster || '—'}` : 'off'],
     ].map(([k, v]) => `<div class="stat"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('');
   }
 
@@ -1355,6 +1355,7 @@
   PAGES.display = async (el) => {
     await loadConfig();
     const m = CONFIG.matrix;
+    const ss = CONFIG.screenSleep || {};
     el.innerHTML = `
       <div class="card"><h3>Video</h3>
         <label class="inline"><input type="checkbox" id="vidOn" ${CONFIG.video.enabled ? 'checked' : ''}> Play a playlist item's video on HDMI</label>
@@ -1373,7 +1374,42 @@
           <label class="inline"><input type="checkbox" id="mSerp" ${m.serpentine ? 'checked' : ''}> Zig-zag (serpentine)</label>
           <label class="inline"><input type="checkbox" id="mPrefer" ${m.preferVideo ? 'checked' : ''}> Prefer a matching video in videos/ (same name as the sequence)</label></div>
         <p class="dim">Matches an xLights matrix model's layout. A real video is sharper than rendered pixels, so it wins when one is found. Matrix and display changes apply after a restart (Settings → Power).</p>
-        <button class="btn primary" id="saveDisp">Save</button></div>`;
+        <button class="btn primary" id="saveDisp">Save</button></div>
+      <div class="card"><div class="row"><h3 style="margin:0">Screen sleep</h3><span class="spacer"></span><span id="ssState"></span></div>
+        <p class="muted">Turns the HDMI screen off when nothing has played for a while, and back on when something plays. Most PC monitors go into standby when the signal stops.</p>
+        <label class="inline"><input type="checkbox" id="ssOn" ${ss.enabled ? 'checked' : ''}> Turn the screen off when idle</label>
+        <div class="fields" style="margin-top:12px">
+          <label>Turn off after (minutes) <input type="number" id="ssMin" min="1" max="240" value="${ss.idleMinutes || 5}"></label>
+          <label>How <select id="ssMethod"><option value="hdmi" ${ss.method !== 'command' ? 'selected' : ''}>Switch the HDMI signal off</option><option value="command" ${ss.method === 'command' ? 'selected' : ''}>Run my commands</option></select></label>
+        </div>
+        <div class="fields" id="ssCmds" style="margin-top:12px" ${ss.method === 'command' ? '' : 'hidden'}>
+          <label>Command to turn it off <input id="ssSleepCmd" class="mono" value="${esc(ss.sleepCommand || '')}" placeholder="e.g. ddcutil setvcp D6 05"></label>
+          <label>Command to turn it on <input id="ssWakeCmd" class="mono" value="${esc(ss.wakeCommand || '')}" placeholder="e.g. ddcutil setvcp D6 01"></label>
+        </div>
+        <label class="inline" style="margin-top:12px"><input type="checkbox" id="ssShows" ${ss.keepAwakeDuringShows !== false ? 'checked' : ''}> Keep it on through scheduled shows, and wake it 2 minutes before one starts</label>
+        <p class="dim">A sleeping monitor takes a few seconds to wake. During scheduled shows it stays on, so the first song isn't missed; a song started by hand wakes it right away.</p>
+        <div class="row"><button class="btn primary" id="saveSS">Save</button><span class="spacer"></span><button class="btn" id="ssSleep"><i class="fas fa-moon"></i> Turn off now</button><button class="btn" id="ssWake"><i class="fas fa-sun"></i> Turn on now</button></div></div>`;
+    const ssState = () => {
+      const st = STATUS && STATUS.screen;
+      const box = $('#ssState');
+      if (!box || !st) return;
+      box.innerHTML = st.asleep ? '<span class="pill">Screen off</span>' : `<span class="pill ok">Screen on</span>${st.enabled && !st.keepAwake && st.idleForMs != null ? ` <span class="dim">idle ${Math.floor(st.idleForMs / 60000)} of ${st.idleMinutes} min</span>` : st.keepAwake ? ` <span class="dim">${esc(st.keepAwake)}</span>` : ''}`
+        + (st.lastError ? ` <span class="pill warn" title="${esc(st.lastError)}">last switch failed</span>` : '');
+    };
+    ssState();
+    pageTimer = setInterval(ssState, 2000);
+    $('#ssMethod').onchange = () => { $('#ssCmds').hidden = $('#ssMethod').value !== 'command'; };
+    $('#saveSS').onclick = guard(() => saveConfig({ screenSleep: { enabled: $('#ssOn').checked, idleMinutes: Math.max(1, +$('#ssMin').value || 5), method: $('#ssMethod').value,
+      keepAwakeDuringShows: $('#ssShows').checked, sleepCommand: $('#ssSleepCmd').value.trim(), wakeCommand: $('#ssWakeCmd').value.trim() } }));
+    const ssDo = (what) => guard(async () => {
+      const r = await api('POST', P('/screen/' + what));
+      if (STATUS) STATUS.screen = r.status;
+      ssState();
+      if (r.result && r.result.ok === false) toast(`Couldn't switch the screen: ${r.result.out || 'failed'}`, true);
+      else toast(what === 'sleep' ? 'Screen off' : 'Screen on');
+    });
+    $('#ssSleep').onclick = ssDo('sleep');
+    $('#ssWake').onclick = ssDo('wake');
     $('#saveDisp').onclick = guard(() => saveConfig({
       video: { enabled: $('#vidOn').checked },
       matrix: { enabled: $('#mOn').checked, startChannel: +$('#mStart').value, width: +$('#mW').value, height: +$('#mH').value, colorOrder: $('#mOrder').value,
