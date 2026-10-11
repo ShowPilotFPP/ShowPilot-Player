@@ -78,6 +78,10 @@
     } catch (err) { $('#loginErr').textContent = err.message; }
   });
 
+  // Audio preview (Files page); stopped when leaving the page.
+  const PREVIEW = { audio: null, name: null };
+  function stopPreview() { if (PREVIEW.audio) { try { PREVIEW.audio.pause(); PREVIEW.audio.src = ''; } catch {} } PREVIEW.audio = null; PREVIEW.name = null; }
+
   // ---------------------------------------------------------------- router
   const PAGES = {};
   const TITLES = { dashboard: 'Dashboard', playlists: 'Playlists', files: 'Files', schedule: 'Schedule', commands: 'Commands', outputs: 'Outputs',
@@ -89,6 +93,7 @@
     const name = (location.hash.slice(1) || 'dashboard').split('/')[0];
     const page = PAGES[name] ? name : 'dashboard';
     clearInterval(pageTimer); pageTimer = null;
+    if (page !== 'files') stopPreview();
     LISTS = {};
     current = page;
     $$('#nav a').forEach((a) => a.classList.toggle('on', a.dataset.page === page));
@@ -594,8 +599,8 @@
       <div class="card"><div class="drop" id="drop">Drop .fseq, audio, video or script files here, or <label class="inline" style="display:inline;color:var(--blue);cursor:pointer"><u>choose files</u><input type="file" id="pick" multiple hidden></label>
         <div class="progress" id="upProg"></div></div>
         <p class="dim" style="margin:10px 0 0">xLights can also upload straight to this player: add it in FPP Connect like any FPP.</p></div>
-      ${tbl('Sequences', LIB.sequences.map((s) => `<tr><td>${esc(s.name)}</td><td>${s.error ? `<span class="pill bad">${esc(s.error)}</span>` : esc(s.mediaFilename || '—')}</td><td class="num">${fmt(s.durationMs)}</td><td class="num">${s.stepMs ? Math.round(1000 / s.stepMs) + ' fps' : ''}</td><td class="num">${s.maxChannel ? s.maxChannel.toLocaleString() + ' ch' : ''}${s.missing && s.missing.length ? `<br><span class="pill warn" title="This file has no channel data for these outputs. Upload it again from xLights FPP Connect.">No data for ${esc(s.missing.join(', '))}</span>` : ''}</td><td class="row end"><button class="btn small" data-play-seq="${esc(s.name)}" data-media="${esc(s.mediaFilename || '')}">Play</button><button class="btn small danger" data-del="sequences/${esc(s.name)}">Delete</button></td></tr>`).join(''), '<th>Name</th><th>Media</th><th class="num">Length</th><th class="num">Rate</th><th class="num">Channels</th><th></th>')}
-      ${tbl('Audio', LIB.music.map((m) => `<tr><td>${esc(m.name)}</td><td class="num">${bytes(m.size)}</td><td class="row end"><button class="btn small danger" data-del="music/${esc(m.name)}">Delete</button></td></tr>`).join(''), '<th>Name</th><th class="num">Size</th><th></th>')}
+      ${tbl('Sequences', LIB.sequences.map((s) => `<tr><td>${esc(s.name)}</td><td>${s.error ? `<span class="pill bad">${esc(s.error)}</span>` : esc(s.mediaFilename || '—')}</td><td class="num">${fmt(s.durationMs)}</td><td class="num">${s.stepMs ? Math.round(1000 / s.stepMs) + ' fps' : ''}</td><td class="num">${s.maxChannel ? s.maxChannel.toLocaleString() + ' ch' : ''}</td><td class="row end"><button class="btn small" data-play-seq="${esc(s.name)}" data-media="${esc(s.mediaFilename || '')}">Play</button><button class="btn small danger" data-del="sequences/${esc(s.name)}">Delete</button></td></tr>`).join(''), '<th>Name</th><th>Media</th><th class="num">Length</th><th class="num">Rate</th><th class="num">Channels</th><th></th>')}
+      ${tbl('Audio', LIB.music.map((m) => `<tr><td>${esc(m.name)}</td><td class="num">${bytes(m.size)}</td><td class="row end"><button class="btn small" data-preview="${esc(m.name)}" title="Listen in this browser (not on the show speakers)"><i class="fas fa-play"></i> Preview</button><button class="btn small danger" data-del="music/${esc(m.name)}">Delete</button></td></tr>`).join(''), '<th>Name</th><th class="num">Size</th><th></th>')}
       ${tbl('Video', LIB.videos.map((m) => `<tr><td>${esc(m.name)}</td><td class="num">${bytes(m.size)}</td><td class="row end"><button class="btn small danger" data-del="videos/${esc(m.name)}">Delete</button></td></tr>`).join(''), '<th>Name</th><th class="num">Size</th><th></th>')}`;
     const drop = $('#drop');
     const handle = guard(async (files) => {
@@ -616,6 +621,26 @@
       await api('DELETE', `/api/file/${d}/${encodeURIComponent(n)}`);
       PAGES.files(el);
     })));
+    // Audio preview in this browser: one file at a time; the button shows
+    // Stop and the elapsed time while it plays.
+    const previewBtn = (name) => $$('[data-preview]', el).find((x) => x.dataset.preview === name);
+    const resetPreviewBtns = () => $$('[data-preview]', el).forEach((x) => { x.innerHTML = '<i class="fas fa-play"></i> Preview'; x.classList.remove('primary'); });
+    if (PREVIEW.audio && PREVIEW.name) { const b = previewBtn(PREVIEW.name); if (b) { b.classList.add('primary'); b.innerHTML = '<i class="fas fa-stop"></i> Stop'; } }
+    $$('[data-preview]', el).forEach((b) => (b.onclick = () => {
+      const name = b.dataset.preview;
+      const same = PREVIEW.name === name;
+      stopPreview();
+      resetPreviewBtns();
+      if (same) return;
+      const a = new Audio(`/api/file/Music/${encodeURIComponent(name)}`);
+      PREVIEW.audio = a; PREVIEW.name = name;
+      b.classList.add('primary');
+      b.innerHTML = '<i class="fas fa-stop"></i> Stop';
+      a.ontimeupdate = () => { const x = previewBtn(name); if (x && PREVIEW.name === name) x.innerHTML = `<i class="fas fa-stop"></i> ${fmt(a.currentTime * 1000)}`; };
+      a.onended = () => { stopPreview(); resetPreviewBtns(); };
+      a.onerror = () => { stopPreview(); resetPreviewBtns(); toast(`Can't play ${name} in this browser`, true); };
+      a.play().catch((e) => { stopPreview(); resetPreviewBtns(); toast(e.message, true); });
+    }));
     $$('[data-play-seq]', el).forEach((b) => (b.onclick = guard(async () => {
       await api('POST', P('/play'), { sequence: b.dataset.playSeq, media: b.dataset.media || undefined });
       toast(`Playing ${b.dataset.playSeq}`);

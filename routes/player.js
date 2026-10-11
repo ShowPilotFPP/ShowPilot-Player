@@ -96,7 +96,6 @@ module.exports = function playerRoutes(ctx) {
         ...(config.get().outputs || []).some((o) => o.enabled !== false) ? [] : ['No controller outputs are set up, so no lights are sent. Add them on Outputs, or in xLights FPP Connect set this player\'s "UDP Out" to "All".'],
         ...require('../lib/health').missing().map((d) => `${d.bin} is not installed (${d.why}). Run System → System software to install it.`),
         ...(player.problems || []),
-        ...(player.state === 'playing' ? (player.seqProblems || []) : []),
       ],
     };
   }));
@@ -171,9 +170,8 @@ module.exports = function playerRoutes(ctx) {
     const sequences = ls('sequences').filter((f) => /\.fseq$/i.test(f)).map((name) => {
       try {
         const i = probe(paths.fileIn('sequences', name));
-        const missing = require('../lib/fseq').uncoveredOutputs(config.get().outputs, i.ranges).map((m) => m.description);
         delete i.ranges;
-        return { name, ...i, missing };
+        return { name, ...i };
       } catch (e) { return { name, error: e.message }; }
     });
     const size = (k, f) => { try { return fs.statSync(paths.fileIn(k, f)).size; } catch { return 0; } };
