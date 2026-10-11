@@ -74,6 +74,7 @@
     try {
       await api('POST', P('/auth/login'), { password: $('#loginPw').value });
       $('#login').hidden = true; $('#loginErr').textContent = '';
+      window.dispatchEvent(new Event('spp-signed-in'));
       route();
     } catch (err) { $('#loginErr').textContent = err.message; }
   });
@@ -92,20 +93,79 @@
 
   // ---------------------------------------------------------------- router
   const PAGES = {};
-  const TITLES = { dashboard: 'Dashboard', playlists: 'Playlists', files: 'Files', schedule: 'Schedule', commands: 'Commands', outputs: 'Outputs',
-    display: 'Video & Matrix', multisync: 'MultiSync', showpilot: 'ShowPilot', plugins: 'Plugins', system: 'System' };
+  // Menu: ShowPilot's rail with groups that open into sub-pages. A sub-page
+  // is "#page/sub"; pages show only their cards marked data-sub="<sub>".
+  const ICON = {
+    dashboard: 'M4 4h7v7H4zM13 4h7v4h-7zM13 10h7v10h-7zM4 13h7v7H4z',
+    show: 'M4 6h16M4 12h10M4 18h7M17 15v6M14 18h6',
+    files: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h6',
+    lights: 'M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.5 1 2.5h6c0-1 .3-1.8 1-2.5A6 6 0 0 0 12 3z',
+    connect: 'M21 12a9 9 0 0 1-15.4 6.4L3 16M3 12a9 9 0 0 1 15.4-6.4L21 8M21 3v5h-5M3 21v-5h5',
+    settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 15a2 2 0 1 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 9 4.6V4a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
+  };
+  const NAV = [
+    { label: 'Dashboard', icon: 'dashboard', page: 'dashboard' },
+    { label: 'Show', icon: 'show', items: [['playlists', '', 'Playlists'], ['schedule', '', 'Schedule'], ['commands', '', 'Commands']] },
+    { label: 'Files', icon: 'files', page: 'files' },
+    { label: 'Lights', icon: 'lights', items: [['outputs', 'controllers', 'Controllers'], ['outputs', 'timing', 'Timing'], ['outputs', 'test', 'Test patterns'], ['display', '', 'Video & Matrix']] },
+    { label: 'Connections', icon: 'connect', items: [['showpilot', '', 'ShowPilot'], ['multisync', '', 'MultiSync'], ['plugins', '', 'Plugins']] },
+    { label: 'Settings', icon: 'settings', items: [['system', 'general', 'General'], ['system', 'security', 'Password'], ['system', 'updates', 'Updates'], ['system', 'restore', 'FPP backup'], ['system', 'power', 'Power'], ['system', 'log', 'Log']] },
+  ];
+  const navSvg = (d, w = 20) => `<svg width="${w}" height="${w}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
+  const hashOf = (page, sub) => '#' + page + (sub ? '/' + sub : '');
+  $('#nav').innerHTML = NAV.map((g, gi) => g.page
+    ? `<a class="spn-item" href="#${g.page}" data-page="${g.page}" title="${esc(g.label)}">${navSvg(ICON[g.icon])}<span class="spn-label">${esc(g.label)}</span></a>`
+    : `<button type="button" class="spn-item" data-group="${gi}" aria-expanded="false" title="${esc(g.label)}">${navSvg(ICON[g.icon])}<span class="spn-label">${esc(g.label)}</span>${'<svg class="spn-chev spn-label" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>'}</button>
+       <div class="spn-sub" data-sub-of="${gi}">${g.items.map(([pg, sub, l]) => `<a class="spn-subitem" href="${hashOf(pg, sub)}" data-page="${pg}" data-sub="${sub}">${esc(l)}</a>`).join('')}</div>`).join('');
+  $$('#nav [data-group]').forEach((b) => (b.onclick = () => {
+    const sub = $(`#nav [data-sub-of="${b.dataset.group}"]`);
+    const open = !sub.classList.contains('open');
+    sub.classList.toggle('open', open);
+    b.setAttribute('aria-expanded', String(open));
+    // Opening a group in the collapsed rail (or the phone menu) goes to its first page.
+    if (open && !sub.querySelector('[aria-current="page"]')) location.hash = sub.querySelector('a').getAttribute('href');
+  }));
+  // Page/sub → where it sits in the menu (for titles and the highlight).
+  const navEntry = (page, sub) => {
+    for (const g of NAV) {
+      if (g.page === page) return { group: null, label: g.label };
+      const it = (g.items || []).find(([pg, sb]) => pg === page && (sb === (sub || '') || (!sub && sb === g.items.find((x) => x[0] === page)[1])));
+      if (it) return { group: g.label, label: it[2], sub: it[1] };
+    }
+    return { group: null, label: page };
+  };
   let current = null;
+  let SUB = '';
   let pageTimer = null;
 
   async function route() {
-    const name = (location.hash.slice(1) || 'dashboard').split('/')[0];
+    const [name, subRaw] = (location.hash.slice(1) || 'dashboard').split('/');
     const page = PAGES[name] ? name : 'dashboard';
+    // Only pages split into sub-pages in the menu use the part after "/" as a
+    // sub-page (Playlists uses it for the open playlist).
+    const subs = NAV.flatMap((g) => g.items || []).filter(([pg, sb]) => pg === page && sb).map(([, sb]) => sb);
+    SUB = subs.length ? (subs.includes(subRaw) ? subRaw : subs[0]) : '';
     clearInterval(pageTimer); pageTimer = null;
     if (page !== 'files') stopPreview();
     LISTS = {};
     current = page;
-    $$('#nav a').forEach((a) => a.classList.toggle('on', a.dataset.page === page));
-    $('#pageTitle').textContent = TITLES[page];
+    const ent = navEntry(page, SUB);
+    $$('#nav [data-page]').forEach((a) => {
+      const on = a.dataset.page === page && (a.dataset.sub === undefined || a.dataset.sub === SUB || (!a.dataset.sub && !SUB));
+      a.classList.toggle('on', on);
+      if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    });
+    $$('#nav [data-group]').forEach((b) => {
+      const sub = $(`#nav [data-sub-of="${b.dataset.group}"]`);
+      const has = !!sub.querySelector('[aria-current="page"]');
+      b.classList.toggle('on', has);
+      if (has) { sub.classList.add('open'); b.setAttribute('aria-expanded', 'true'); }
+    });
+    $('#pageTitle').textContent = ent.label;
+    $('#pageCrumb').textContent = ent.group || '';
+    document.title = `${ent.label} · ShowPilot Player`;
+    // Sub-pages: only the cards marked for this sub-page show (kept through re-renders).
+    $('#subStyle').textContent = SUB ? `#page [data-sub]:not([data-sub~="${SUB.replace(/[^a-z-]/g, '')}"]) { display: none !important; } #page .grid.g2 { grid-template-columns: minmax(0, 1fr); } #page [data-sub] + [data-sub] { margin-top: 20px; }` : '';
     $('#side').classList.remove('open'); document.body.classList.remove('menu-open');
     const el = $('#page');
     el.innerHTML = '<p class="muted">Loading…</p>';
@@ -128,16 +188,21 @@
     setMenu(false);
     if (ev.detail > 0) a.blur(); // a mouse click: let the rail collapse when the pointer leaves
   });
+  // A theme choice is saved with the player's settings straight away (before
+  // 0.4.3 the System page picker only saved on Save, so a reboot or update
+  // brought back the old theme).
+  async function setTheme(t) {
+    if (window.SPPTheme) SPPTheme.set(t);
+    for (const id of ['#themeSelect', '#theme']) { const x = $(id); if (x) x.value = t; }
+    const c = await api('PUT', P('/config'), { ui: { theme: t } });
+    CONFIG = CONFIG ? { ...CONFIG, ui: c.ui } : c;
+  }
   // Theme picker in the top bar, like ShowPilot's admin. Saved with the player's settings.
   if (window.SPPTheme) {
     const ts = $('#themeSelect');
     ts.innerHTML = SPPTheme.list.map(([v, l]) => `<option value="${v}">${esc(l.replace(' (follow this device)', ''))}</option>`).join('');
     ts.value = SPPTheme.current();
-    ts.onchange = async () => {
-      SPPTheme.set(ts.value);
-      try { await api('PUT', P('/config'), { ui: { theme: ts.value } }); if (CONFIG) CONFIG.ui = { ...(CONFIG.ui || {}), theme: ts.value }; } catch {}
-      const sys = $('#theme'); if (sys) sys.value = ts.value;
-    };
+    ts.onchange = guard(async () => { await setTheme(ts.value); });
   } else $('#themeSelect').hidden = true;
   // "Keep menu open" (ShowPilot's pinned rail), remembered per browser.
   const setPinned = (on) => {
@@ -148,8 +213,9 @@
     $('path', b).setAttribute('d', on ? 'M15 6l-6 6 6 6' : 'M9 6l6 6-6 6');
     try { localStorage.setItem('spp_rail_pinned', on ? '1' : '0'); } catch {}
   };
+  const savePinned = (on) => api('PUT', P('/config'), { ui: { railPinned: on } }).catch(() => {});
   try { if (localStorage.getItem('spp_rail_pinned') === '1') setPinned(true); } catch {}
-  $('#spnPin').addEventListener('click', (ev) => { setPinned(!document.body.classList.contains('rail-pinned')); if (ev.detail > 0) ev.currentTarget.blur(); });
+  $('#spnPin').addEventListener('click', (ev) => { const on = !document.body.classList.contains('rail-pinned'); setPinned(on); savePinned(on); if (ev.detail > 0) ev.currentTarget.blur(); });
 
   // Top bar status, refreshed everywhere.
   async function pollStatus() {
@@ -220,27 +286,53 @@
     const live = p.state === 'playing';
     const pct = p.durationMs ? Math.min(100, (p.positionMs / p.durationMs) * 100) : 0;
     const where = `${pl.name && !pl.name.startsWith('_') ? `${esc(pl.name)} · ${pl.index} of ${pl.size}` : ''}${pl.breadcrumbs && pl.breadcrumbs.length ? ` · interrupted ${esc(pl.breadcrumbs.join(' › '))}` : ''}`;
-    card.innerHTML = `
-      <span class="spn-tally ${live ? '' : pl.paused ? 'paused' : 'off'}"><i></i>${live ? 'ON AIR' : pl.paused ? 'PAUSED' : 'OFF AIR'}</span>
-      ${where ? `<span class="muted">${where}</span>` : ''}
-      <div><h2 class="spn-title ${p.sequence || p.media ? '' : 'idle'}">${esc((p.sequence || p.media || 'Nothing playing').replace(/\.fseq$/i, ''))}</h2>
-      <div class="spn-artist">${p.sequence || p.media ? `${p.sequence && p.media ? esc(p.media) : ''}${p.video ? ` · video ${esc(p.video)}` : ''}` : 'The show is idle.'}</div></div>
-      <div><div class="spn-track"><div class="spn-fill" style="width:${pct}%"></div></div>
-      <div class="spn-times"><span>${fmt(p.positionMs)}</span><span>${fmt(p.durationMs)}</span></div></div>
-      <div class="transport">
-        <button class="btn" data-t="prev">Prev</button>
-        <button class="btn" data-t="pause">${pl.paused ? 'Resume' : 'Pause'}</button>
-        <button class="btn" data-t="next">Next</button>
-        <button class="btn" data-t="graceful">${pl.stopping ? 'Stopping…' : 'Stop after song'}</button>
-        <button class="btn primary" data-t="stop">Stop now</button>
-      </div>`;
-    $$('[data-t]', card).forEach((b) => (b.onclick = guard(async () => {
-      const t = b.dataset.t;
-      if (t === 'stop') await api('POST', P('/stop'));
-      else if (t === 'graceful') await api('POST', P('/stop'), { graceful: true });
-      else await api('POST', P('/' + t));
-      pollStatus();
-    })));
+    // Built once, then updated in place: replacing the buttons every second
+    // (as before 0.4.3) swallowed clicks that landed during a refresh, so Stop
+    // now sometimes needed several presses.
+    if (!card.dataset.built) {
+      card.dataset.built = '1';
+      card.innerHTML = `
+        <span class="spn-tally" id="nTally"><i></i><b>OFF AIR</b></span>
+        <span class="muted" id="nWhere"></span>
+        <div><h2 class="spn-title" id="nTitle"></h2><div class="spn-artist" id="nArtist"></div></div>
+        <div><div class="spn-track"><div class="spn-fill" id="nFill"></div></div>
+        <div class="spn-times"><span id="nPos">0:00</span><span id="nDur">0:00</span></div></div>
+        <div class="transport">
+          <button class="btn" data-t="prev"><i class="fas fa-backward-step"></i> Prev</button>
+          <button class="btn" data-t="pause"><i class="fas fa-pause"></i> <span>Pause</span></button>
+          <button class="btn" data-t="next"><i class="fas fa-forward-step"></i> Next</button>
+          <button class="btn" data-t="graceful"><span>Stop after song</span></button>
+          <button class="btn primary" data-t="stop"><i class="fas fa-stop"></i> Stop now</button>
+        </div>`;
+      $$('[data-t]', card).forEach((b) => (b.onclick = async () => {
+        const t = b.dataset.t;
+        if (b.disabled) return;
+        b.disabled = true;
+        try {
+          if (t === 'stop') await api('POST', P('/stop'));
+          else if (t === 'graceful') await api('POST', P('/stop'), { graceful: true });
+          else await api('POST', P('/' + t));
+          if (t === 'stop') toast('Stopped');
+        } catch (e) { toast(e.message, true); }
+        finally { b.disabled = false; pollStatus(); }
+      }));
+    }
+    const tally = $('#nTally');
+    tally.className = `spn-tally ${live ? '' : pl.paused ? 'paused' : 'off'}`;
+    $('b', tally).textContent = live ? 'ON AIR' : pl.paused ? 'PAUSED' : 'OFF AIR';
+    $('#nWhere').innerHTML = where;
+    $('#nWhere').hidden = !where;
+    const title = $('#nTitle');
+    title.textContent = (p.sequence || p.media || 'Nothing playing').replace(/\.fseq$/i, '');
+    title.classList.toggle('idle', !(p.sequence || p.media));
+    $('#nArtist').textContent = p.sequence || p.media ? `${p.sequence && p.media ? p.media : ''}${p.video ? ` · video ${p.video}` : ''}` : 'The show is idle.';
+    $('#nFill').style.width = pct + '%';
+    $('#nPos').textContent = fmt(p.positionMs);
+    $('#nDur').textContent = fmt(p.durationMs);
+    const pb = $('[data-t="pause"]', card);
+    $('span', pb).textContent = pl.paused ? 'Resume' : 'Pause';
+    $('i', pb).className = `fas fa-${pl.paused ? 'play' : 'pause'}`;
+    $('[data-t="graceful"] span', card).textContent = pl.stopping ? 'Stopping…' : 'Stop after song';
     const next = STATUS.next;
     const dn = $('#dashNext');
     if (dn) dn.textContent = next ? `Up next: ${next.sequenceName || next.mediaName || next.type}` : '';
@@ -600,60 +692,127 @@
     }
   }
 
+  // Files: like FPP's File Manager, one table at a time with a tab per kind
+  // of file (#files/<tab>), a search box, sortable columns and drag-and-drop
+  // anywhere on the card.
+  const FILE_TABS = [['sequences', 'Sequences'], ['music', 'Audio'], ['videos', 'Video'], ['scripts', 'Scripts']];
+  const fdate = (ms) => (ms ? new Date(ms).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '');
   PAGES.files = async (el) => {
     await loadLib();
-    const tbl = (title, rows, head) => `<div class="card"><h3>${title}</h3><div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${rows || '<tr><td class="dim" colspan="9">Nothing here yet.</td></tr>'}</tbody></table></div></div>`;
-    el.innerHTML = `
-      <div class="card"><div class="drop" id="drop">Drop .fseq, audio, video or script files here, or <label class="inline" style="display:inline;color:var(--blue);cursor:pointer"><u>choose files</u><input type="file" id="pick" multiple hidden></label>
-        <div class="progress" id="upProg"></div></div>
-        <p class="dim" style="margin:10px 0 0">xLights can also upload straight to this player: add it in FPP Connect like any FPP.</p></div>
-      ${tbl('Sequences', LIB.sequences.map((s) => `<tr><td>${esc(s.name)}</td><td>${s.error ? `<span class="pill bad">${esc(s.error)}</span>` : esc(s.mediaFilename || '—')}</td><td class="num">${fmt(s.durationMs)}</td><td class="num">${s.stepMs ? Math.round(1000 / s.stepMs) + ' fps' : ''}</td><td class="num">${s.maxChannel ? s.maxChannel.toLocaleString() + ' ch' : ''}</td><td class="row end"><button class="btn small" data-play-seq="${esc(s.name)}" data-media="${esc(s.mediaFilename || '')}">Play</button><button class="btn small danger" data-del="sequences/${esc(s.name)}">Delete</button></td></tr>`).join(''), '<th>Name</th><th>Media</th><th class="num">Length</th><th class="num">Rate</th><th class="num">Channels</th><th></th>')}
-      ${tbl('Audio', LIB.music.map((m) => `<tr><td>${esc(m.name)}</td><td class="num">${bytes(m.size)}</td><td class="row end"><button class="btn small" data-preview="${esc(m.name)}" title="Listen in this browser (not on the show speakers)"><i class="fas fa-play"></i> Preview</button><button class="btn small danger" data-del="music/${esc(m.name)}">Delete</button></td></tr>`).join(''), '<th>Name</th><th class="num">Size</th><th></th>')}
-      ${tbl('Video', LIB.videos.map((m) => `<tr><td>${esc(m.name)}</td><td class="num">${bytes(m.size)}</td><td class="row end"><button class="btn small danger" data-del="videos/${esc(m.name)}">Delete</button></td></tr>`).join(''), '<th>Name</th><th class="num">Size</th><th></th>')}`;
-    const drop = $('#drop');
+    const want = (location.hash.split('/')[1] || '').toLowerCase();
+    let tab = FILE_TABS.some(([k]) => k === want) ? want : 'sequences';
+    let q = '';
+    let sort = { key: 'name', dir: 1 };
+    const lists = () => ({ sequences: LIB.sequences, music: LIB.music, videos: LIB.videos, scripts: LIB.scriptFiles || LIB.scripts.map((n) => ({ name: n })) });
+    const COLS = {
+      sequences: [['name', 'Name'], ['mediaFilename', 'Media'], ['durationMs', 'Length', 'num'], ['stepMs', 'Rate', 'num'], ['maxChannel', 'Channels', 'num'], ['mtime', 'Modified', 'num']],
+      music: [['name', 'Name'], ['size', 'Size', 'num'], ['mtime', 'Modified', 'num']],
+      videos: [['name', 'Name'], ['size', 'Size', 'num'], ['mtime', 'Modified', 'num']],
+      scripts: [['name', 'Name'], ['size', 'Size', 'num'], ['mtime', 'Modified', 'num']],
+    };
+    const cell = (k, f) => {
+      if (k === 'name') return `<td class="f-name">${esc(f.name)}</td>`;
+      if (k === 'mediaFilename') return `<td class="f-media">${f.error ? `<span class="pill bad">${esc(f.error)}</span>` : esc(f.mediaFilename || '—')}</td>`;
+      if (k === 'durationMs') return `<td class="num">${fmt(f.durationMs)}</td>`;
+      if (k === 'stepMs') return `<td class="num">${f.stepMs ? Math.round(1000 / f.stepMs) + ' fps' : ''}</td>`;
+      if (k === 'maxChannel') return `<td class="num">${f.maxChannel ? f.maxChannel.toLocaleString() : ''}</td>`;
+      if (k === 'size') return `<td class="num">${f.size !== undefined ? bytes(f.size) : ''}</td>`;
+      if (k === 'mtime') return `<td class="num dim">${esc(fdate(f.mtime))}</td>`;
+      return '<td></td>';
+    };
+    const actions = (f) => {
+      const n = esc(f.name);
+      if (tab === 'sequences') return `<button class="btn small" data-play-seq="${n}" data-media="${esc(f.mediaFilename || '')}" title="Play on the show"><i class="fas fa-play"></i> Play</button><button class="icon-btn2 danger" data-del="sequences/${n}" title="Delete"><i class="fas fa-trash"></i></button>`;
+      if (tab === 'music') return `<button class="btn small" data-preview="${n}" title="Listen in this browser (not on the show speakers)"><i class="fas fa-play"></i> Preview</button><a class="icon-btn2" href="/api/file/Music/${encodeURIComponent(f.name)}" download title="Download"><i class="fas fa-download"></i></a><button class="icon-btn2 danger" data-del="music/${n}" title="Delete"><i class="fas fa-trash"></i></button>`;
+      if (tab === 'videos') return `<a class="icon-btn2" href="/api/file/Videos/${encodeURIComponent(f.name)}" download title="Download"><i class="fas fa-download"></i></a><button class="icon-btn2 danger" data-del="videos/${n}" title="Delete"><i class="fas fa-trash"></i></button>`;
+      return `<a class="icon-btn2" href="/api/file/Scripts/${encodeURIComponent(f.name)}" download title="Download"><i class="fas fa-download"></i></a><button class="icon-btn2 danger" data-del="scripts/${n}" title="Delete"><i class="fas fa-trash"></i></button>`;
+    };
+    const rows = () => {
+      const all = lists()[tab] || [];
+      const list = all.filter((f) => !q || `${f.name} ${f.mediaFilename || ''}`.toLowerCase().includes(q.toLowerCase()));
+      const k = sort.key;
+      list.sort((a, b) => {
+        const x = a[k], y = b[k];
+        if (typeof x === 'number' || typeof y === 'number') return ((x || 0) - (y || 0)) * sort.dir;
+        return String(x || '').localeCompare(String(y || ''), undefined, { numeric: true, sensitivity: 'base' }) * sort.dir;
+      });
+      return { list, total: all.length };
+    };
+    const render = () => {
+      const L = lists();
+      const { list, total } = rows();
+      const cols = COLS[tab];
+      el.innerHTML = `
+        <div class="card files-card" id="drop">
+          <div class="row files-head">
+            <div class="seg seg-wrap" role="tablist">${FILE_TABS.map(([k, l]) => `<button type="button" role="tab" data-ftab="${k}" aria-selected="${k === tab}" class="${k === tab ? 'on' : ''}">${l} <span class="count">${(L[k] || []).length}</span></button>`).join('')}</div>
+            <span class="spacer"></span>
+            <input id="fq" type="search" placeholder="Search ${esc(FILE_TABS.find(([k]) => k === tab)[1].toLowerCase())}" value="${esc(q)}">
+            <label class="btn primary" for="pick"><i class="fas fa-upload"></i> Upload</label><input type="file" id="pick" multiple hidden>
+          </div>
+          <div class="progress" id="upProg"></div>
+          <div class="table-wrap"><table class="files-table"><thead><tr>${cols.map(([k, l, c]) => `<th class="${c || ''} sortable" data-sort="${k}" aria-sort="${sort.key === k ? (sort.dir > 0 ? 'ascending' : 'descending') : 'none'}">${l}${sort.key === k ? ` <i class="fas fa-caret-${sort.dir > 0 ? 'up' : 'down'}"></i>` : ''}</th>`).join('')}<th></th></tr></thead>
+            <tbody>${list.map((f) => `<tr>${cols.map(([k]) => cell(k, f)).join('')}<td class="f-acts"><div class="row end">${actions(f)}</div></td></tr>`).join('')
+              || `<tr><td class="dim" colspan="${cols.length + 1}">${total ? 'No match.' : 'Nothing here yet. Drop files on this card or use Upload.'}</td></tr>`}</tbody></table></div>
+          <p class="dim files-foot">${total ? `${list.length === total ? total : `${list.length} of ${total}`} file${total === 1 ? '' : 's'} · ` : ''}Drop .fseq, audio, video or script files anywhere on this card. xLights can also upload straight to this player with FPP Connect.</p>
+        </div>`;
+      wire();
+    };
+    const wire = () => {
+      $$('[data-ftab]', el).forEach((b) => (b.onclick = () => { tab = b.dataset.ftab; q = ''; sort = { key: 'name', dir: 1 }; history.replaceState(null, '', '#files/' + tab); render(); }));
+      $('#fq').oninput = (ev) => { q = ev.target.value; const pos = ev.target.selectionStart; render(); const i = $('#fq'); i.focus(); i.setSelectionRange(pos, pos); };
+      $$('[data-sort]', el).forEach((th) => (th.onclick = () => { const k = th.dataset.sort; sort = { key: k, dir: sort.key === k ? -sort.dir : (k === 'mtime' ? -1 : 1) }; render(); }));
+      const drop = $('#drop');
+      drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+      drop.addEventListener('dragleave', (e) => { if (!drop.contains(e.relatedTarget)) drop.classList.remove('over'); });
+      drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); handle([...e.dataTransfer.files]); });
+      $('#pick').addEventListener('change', (e) => handle([...e.target.files]));
+      $$('[data-del]', el).forEach((b) => (b.onclick = guard(async () => {
+        const i = b.dataset.del.indexOf('/');
+        const d = b.dataset.del.slice(0, i), n = b.dataset.del.slice(i + 1);
+        if (!(await ask(`${n} will be removed from the player.`, { title: 'Delete file?', ok: 'Delete', danger: true }))) return;
+        await api('DELETE', `/api/file/${d}/${encodeURIComponent(n)}`);
+        if (PREVIEW.name === n) stopPreview();
+        await loadLib(); render();
+      })));
+      $$('[data-play-seq]', el).forEach((b) => (b.onclick = guard(async () => {
+        await api('POST', P('/play'), { sequence: b.dataset.playSeq, media: b.dataset.media || undefined });
+        toast(`Playing ${b.dataset.playSeq}`);
+      })));
+      // Audio preview in this browser: one file at a time; the button shows
+      // Stop and the elapsed time while it plays.
+      const previewBtn = (name) => $$('[data-preview]', el).find((x) => x.dataset.preview === name);
+      const resetPreviewBtns = () => $$('[data-preview]', el).forEach((x) => { x.innerHTML = '<i class="fas fa-play"></i> Preview'; x.classList.remove('primary'); });
+      if (PREVIEW.audio && PREVIEW.name) { const b = previewBtn(PREVIEW.name); if (b) { b.classList.add('primary'); b.innerHTML = '<i class="fas fa-stop"></i> Stop'; } }
+      $$('[data-preview]', el).forEach((b) => (b.onclick = () => {
+        const name = b.dataset.preview;
+        const same = PREVIEW.name === name;
+        stopPreview();
+        resetPreviewBtns();
+        if (same) return;
+        const a = new Audio(`/api/file/Music/${encodeURIComponent(name)}`);
+        PREVIEW.audio = a; PREVIEW.name = name;
+        b.classList.add('primary');
+        b.innerHTML = '<i class="fas fa-stop"></i> Stop';
+        const mine = () => PREVIEW.audio === a; // ignore events from a preview that was already replaced
+        a.ontimeupdate = () => { const x = previewBtn(name); if (x && mine()) x.innerHTML = `<i class="fas fa-stop"></i> ${fmt(a.currentTime * 1000)}`; };
+        a.onended = () => { if (!mine()) return; stopPreview(); resetPreviewBtns(); };
+        a.onerror = () => { if (!mine()) return; stopPreview(); resetPreviewBtns(); toast(`Can't play ${name} in this browser`, true); };
+        a.play().catch((e) => { if (!mine() || e.name === 'AbortError') return; stopPreview(); resetPreviewBtns(); toast(e.message, true); });
+      }));
+    };
     const handle = guard(async (files) => {
       for (const f of files) {
-        await upload(f, (p) => { $('#upProg').textContent = `${f.name}: ${Math.round(p * 100)}%`; });
+        await upload(f, (p) => { const u = $('#upProg'); if (u) u.textContent = `${f.name}: ${Math.round(p * 100)}%`; });
         toast(`Uploaded ${f.name}`);
       }
-      $('#upProg').textContent = '';
-      PAGES.files(el);
+      // Show the tab of what was uploaded last.
+      const last = files[files.length - 1];
+      const d = last && folderFor(last.name);
+      if (d && FILE_TABS.some(([k]) => k === d)) { tab = d; history.replaceState(null, '', '#files/' + tab); }
+      await loadLib(); render();
     });
-    drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
-    drop.addEventListener('dragleave', () => drop.classList.remove('over'));
-    drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); handle([...e.dataTransfer.files]); });
-    $('#pick').addEventListener('change', (e) => handle([...e.target.files]));
-    $$('[data-del]', el).forEach((b) => (b.onclick = guard(async () => {
-      const [d, n] = b.dataset.del.split('/');
-      if (!(await ask(`${n} will be removed from the player.`, { title: 'Delete file?', ok: 'Delete', danger: true }))) return;
-      await api('DELETE', `/api/file/${d}/${encodeURIComponent(n)}`);
-      PAGES.files(el);
-    })));
-    // Audio preview in this browser: one file at a time; the button shows
-    // Stop and the elapsed time while it plays.
-    const previewBtn = (name) => $$('[data-preview]', el).find((x) => x.dataset.preview === name);
-    const resetPreviewBtns = () => $$('[data-preview]', el).forEach((x) => { x.innerHTML = '<i class="fas fa-play"></i> Preview'; x.classList.remove('primary'); });
-    if (PREVIEW.audio && PREVIEW.name) { const b = previewBtn(PREVIEW.name); if (b) { b.classList.add('primary'); b.innerHTML = '<i class="fas fa-stop"></i> Stop'; } }
-    $$('[data-preview]', el).forEach((b) => (b.onclick = () => {
-      const name = b.dataset.preview;
-      const same = PREVIEW.name === name;
-      stopPreview();
-      resetPreviewBtns();
-      if (same) return;
-      const a = new Audio(`/api/file/Music/${encodeURIComponent(name)}`);
-      PREVIEW.audio = a; PREVIEW.name = name;
-      b.classList.add('primary');
-      b.innerHTML = '<i class="fas fa-stop"></i> Stop';
-      const mine = () => PREVIEW.audio === a; // ignore events from a preview that was already replaced
-      a.ontimeupdate = () => { const x = previewBtn(name); if (x && mine()) x.innerHTML = `<i class="fas fa-stop"></i> ${fmt(a.currentTime * 1000)}`; };
-      a.onended = () => { if (!mine()) return; stopPreview(); resetPreviewBtns(); };
-      a.onerror = () => { if (!mine()) return; stopPreview(); resetPreviewBtns(); toast(`Can't play ${name} in this browser`, true); };
-      a.play().catch((e) => { if (!mine() || e.name === 'AbortError') return; stopPreview(); resetPreviewBtns(); toast(e.message, true); });
-    }));
-    $$('[data-play-seq]', el).forEach((b) => (b.onclick = guard(async () => {
-      await api('POST', P('/play'), { sequence: b.dataset.playSeq, media: b.dataset.media || undefined });
-      toast(`Playing ${b.dataset.playSeq}`);
-    })));
+    render();
   };
 
   // ---------------------------------------------------------------- commands (shared)
@@ -1086,7 +1245,7 @@
             <label>Latitude <input id="lat" value="${esc(loc.latitude ?? '')}" placeholder="e.g. 36.1"></label>
             <label>Longitude <input id="lon" value="${esc(loc.longitude ?? '')}" placeholder="e.g. -94.1"></label>
             <button class="btn" id="geo" type="button">Use this device's location</button><button class="btn primary" id="saveLoc">Save</button></div>
-            <p class="dim">Change the timezone on the System page.</p></div></div>
+            <p class="dim">Change the timezone under Settings → General.</p></div></div>
         <div class="grid sch-grid">
           <div class="card"><div class="row"><h3 style="margin:0">Schedule</h3><span class="spacer"></span>
             <button class="btn" id="addCmd" ${editing ? 'disabled' : ''}>Add command</button><button class="btn primary" id="addShow" ${editing ? 'disabled' : ''}>Add show</button></div>
@@ -1134,14 +1293,14 @@
     let outs = clone(CONFIG.outputs || []);
     const render = () => {
       el.innerHTML = `
-        <div class="card"><h3>Timing</h3><div class="row">
+        <div class="card" data-sub="timing"><h3>Timing</h3><div class="row">
           <label>Lights offset (ms) <input type="number" id="offset" value="${CONFIG.syncOffsetMs}"></label>
           <label class="inline"><input type="checkbox" id="blank" ${CONFIG.blankBetweenSequences ? 'checked' : ''}> Blank lights between sequences</label>
           <label>Pacing (Mbit/s per controller) <input type="number" id="pacing" min="0" max="1000" step="5" value="${CONFIG.outputPacingMbps ?? 90}" style="width:90px"></label>
           <button class="btn" id="saveTiming">Save</button></div>
           <p class="dim">Positive offset shows the lights earlier than the audio. Use it for fixed latency in your audio chain (receiver, FM transmitter); a gap that grows during a song is a bug, not something to tune here.</p>
           <p class="dim">Pacing spreads each controller's packets out like FPP does (90 by default). Without it a big matrix's frame leaves at gigabit speed and the switch drops packets on the way to a 100 Mbit device (DDP errors, stale lines). 0 turns it off.</p></div>
-        <div class="card"><div class="row"><h3 style="margin:0">Controllers</h3><span class="spacer"></span>
+        <div class="card" data-sub="controllers"><div class="row"><h3 style="margin:0">Controllers</h3><span class="spacer"></span>
           <button class="btn" data-add="ddp">Add DDP</button><button class="btn" data-add="e131">Add E1.31</button><button class="btn primary" id="saveOuts">Save</button></div>
           <div class="table-wrap"><table><thead><tr><th>On</th><th>Type</th><th>Description</th><th>IP / multicast</th><th>Start ch</th><th>Channels / universes</th><th></th></tr></thead><tbody>
           ${outs.map((o, i) => `<tr data-i="${i}">
@@ -1156,7 +1315,7 @@
             <td><button class="btn small danger" data-rm>✕</button></td></tr>`).join('') || '<tr><td colspan="7" class="dim">No outputs yet. Add the controllers this player should drive.</td></tr>'}
           </tbody></table></div>
           <p class="dim">Packets match FPP's byte for byte (DDP on port 4048 with PUSH on each controller's last packet; E1.31 on 5568).</p></div>
-        <div class="card"><h3>Test patterns</h3><p class="muted">Runs only while the show is stopped.</p>
+        <div class="card" data-sub="test"><h3>Test patterns</h3><p class="muted">Runs only while the show is stopped.</p>
           <div class="row"><button class="btn" data-test="rgbcycle">RGB cycle</button><button class="btn" data-test="chase">Chase</button>
           <button class="btn" data-test="solid" data-color="255,255,255">White</button><button class="btn" data-test="solid" data-color="255,0,0">Red</button>
           <button class="btn" data-test="solid" data-color="0,255,0">Green</button><button class="btn" data-test="solid" data-color="0,0,255">Blue</button>
@@ -1203,7 +1362,7 @@
         <div class="row" style="margin-top:12px">
           <label class="inline"><input type="checkbox" id="mSerp" ${m.serpentine ? 'checked' : ''}> Zig-zag (serpentine)</label>
           <label class="inline"><input type="checkbox" id="mPrefer" ${m.preferVideo ? 'checked' : ''}> Prefer a matching video in videos/ (same name as the sequence)</label></div>
-        <p class="dim">Matches an xLights matrix model's layout. A real video is sharper than rendered pixels, so it wins when one is found. Matrix and display changes apply after a restart (System page).</p>
+        <p class="dim">Matches an xLights matrix model's layout. A real video is sharper than rendered pixels, so it wins when one is found. Matrix and display changes apply after a restart (Settings → Power).</p>
         <button class="btn primary" id="saveDisp">Save</button></div>`;
     $('#saveDisp').onclick = guard(() => saveConfig({
       video: { enabled: $('#vidOn').checked },
@@ -1471,7 +1630,7 @@
     const [ad, auth, tz] = await Promise.all([api('GET', P('/audio-devices')).catch(() => ({ devices: [], auto: '' })), api('GET', P('/auth')), api('GET', P('/timezone')).catch(() => ({ current: '', zones: [] }))]);
     el.innerHTML = `
       <div class="grid g2">
-        <div class="card"><h3>Player</h3><div class="stack">
+        <div class="card" data-sub="general"><h3>Player</h3><div class="stack">
           <label>Name on the network <input id="host" value="${esc(CONFIG.hostName)}"></label>
           <label>Description <input id="desc" value="${esc(CONFIG.hostDescription)}"></label>
           <label>Audio output <select id="adev"><option value="auto">Automatic — ${esc(ad.auto || 'USB card if present')}</option>${ad.devices.map((d) => `<option value="${esc(d.id)}" ${d.id === CONFIG.audioDevice ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select></label>
@@ -1479,22 +1638,22 @@
           <label>Timezone (schedules use local time) <select id="tz">${tz.zones.map((z) => `<option ${z === tz.current ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select></label>
           <p class="dim">There is no volume control on purpose: set the level once at your amplifier or transmitter.</p>
           <button class="btn primary" id="saveSys">Save</button></div></div>
-        <div class="card"><h3>Admin password</h3><p class="muted">${auth.required ? 'The admin pages need a password.' : 'No password set: anyone on this network can use the admin pages.'}</p>
+        <div class="card" data-sub="security"><h3>Admin password</h3><p class="muted">${auth.required ? 'The admin pages need a password.' : 'No password set: anyone on this network can use the admin pages.'}</p>
           <div class="row"><input type="password" id="pw" placeholder="New password (6+ characters)" autocomplete="new-password"><button class="btn" id="setPw">Set</button>${auth.required ? '<button class="btn danger" id="clrPw">Remove</button><button class="btn" id="logout">Sign out</button>' : ''}</div>
           <p class="dim">xLights and FPP plugins use the FPP-compatible API, which stays open like on FPP.</p></div>
-        <div class="card"><h3>Updates</h3><div id="upd" class="muted">Checking…</div></div>
-        <div class="card"><h3>System software</h3><div id="sysUpd" class="muted">Raspberry Pi OS packages, mpv, ffmpeg, PHP and Node.js. Updated in place, no reflashing.</div>
+        <div class="card" data-sub="updates"><h3>Player software</h3><div id="upd" class="muted">Checking…</div></div>
+        <div class="card" data-sub="updates"><h3>System software</h3><div id="sysUpd" class="muted">Raspberry Pi OS packages, mpv, ffmpeg, PHP and Node.js. Updated in place, no reflashing.</div>
           <div class="row" style="margin-top:10px"><button class="btn" id="sysChk">Check</button><button class="btn primary" id="sysRun">Update system software</button></div>
           <pre class="logs mono" id="sysLog" hidden style="margin-top:10px;max-height:260px"></pre></div>
-        <div class="card"><h3>Power</h3><div class="row"><button class="btn" data-sys="restart">Restart player</button><button class="btn" data-sys="reboot">Reboot</button><button class="btn danger" data-sys="shutdown">Shut down</button></div>
+        <div class="card" data-sub="power"><h3>Power</h3><div class="row"><button class="btn" data-sys="restart">Restart player</button><button class="btn" data-sys="reboot">Reboot</button><button class="btn danger" data-sys="shutdown">Shut down</button></div>
           <p class="dim">Restart applies audio device, display and matrix changes.</p></div>
       </div>
-      <div class="card" id="restoreCard"><h3>Restore from an FPP backup</h3>
+      <div class="card" id="restoreCard" data-sub="restore"><h3>Restore from an FPP backup</h3>
         <p class="muted">Bring over playlists, the schedule, command presets, scripts, controller outputs and settings from a Falcon Player backup. You pick what to restore; network settings and passwords are never touched.</p>
         <div class="row"><label class="btn" for="bkFile" style="display:inline-flex">Choose backup file…</label><input type="file" id="bkFile" accept=".json,application/json" hidden><span class="dim" id="bkName">In FPP: Content Setup → File Manager → Backups, or Status/Control → Backups → Download.</span></div>
         <div id="bkBody"></div></div>
-      <div class="card"><div class="row"><h3 style="margin:0">Log</h3><span class="spacer"></span><button class="btn small" id="refLog">Refresh</button></div><pre class="logs mono" id="log"></pre></div>`;
-    $('#theme').onchange = (ev) => { if (window.SPPTheme) SPPTheme.set(ev.target.value); const ts = $('#themeSelect'); if (ts) ts.value = ev.target.value; };
+      <div class="card" data-sub="log"><div class="row"><h3 style="margin:0">Log</h3><span class="spacer"></span><button class="btn small" id="refLog">Refresh</button></div><pre class="logs mono" id="log"></pre></div>`;
+    $('#theme').onchange = guard(async (ev) => { await setTheme(ev.target.value); });
     $('#saveSys').onclick = guard(async () => {
       if ($('#tz').value && $('#tz').value !== tz.current) await api('PUT', P('/timezone'), { timezone: $('#tz').value });
       await saveConfig({ hostName: $('#host').value.trim(), hostDescription: $('#desc').value, audioDevice: $('#adev').value, ui: { theme: $('#theme').value } });
@@ -1552,7 +1711,9 @@
 
   // ---------------------------------------------------------------- boot
   // The theme is saved with the player's settings; follow it on every device.
-  api('GET', P('/config')).then((c) => { CONFIG = CONFIG || c; if (window.SPPTheme && c.ui && c.ui.theme && c.ui.theme !== SPPTheme.current()) { SPPTheme.set(c.ui.theme); const ts = $('#themeSelect'); if (ts) ts.value = c.ui.theme; } }).catch(() => {});
+  const followSavedTheme = () => api('GET', P('/config')).then((c) => { CONFIG = CONFIG || c; if (window.SPPTheme && c.ui && c.ui.theme && c.ui.theme !== SPPTheme.current()) { SPPTheme.set(c.ui.theme); const ts = $('#themeSelect'); if (ts) ts.value = c.ui.theme; } if (c.ui && typeof c.ui.railPinned === 'boolean') setPinned(c.ui.railPinned); }).catch(() => {});
+  followSavedTheme();
+  window.addEventListener('spp-signed-in', followSavedTheme);
   pollStatus();
   route();
 })();

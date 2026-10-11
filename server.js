@@ -126,6 +126,15 @@ async function main() {
   const php = (req, res) => runPhp(path.join(FPPDIR, 'www', 'plugin.php'), req, res, { env: { FPPDIR, MEDIADIR: paths.MEDIA_DIR } });
   app.get('/plugin.php', php);
   app.post('/plugin.php', express.raw({ type: () => true, limit: '16mb' }), php);
+  // The admin page carries the saved theme, so it opens in the right theme on
+  // every device, before sign-in and after a reboot or update.
+  const indexFile = path.join(__dirname, 'public', 'index.html');
+  app.get(['/', '/index.html'], (req, res) => {
+    let html;
+    try { html = fs.readFileSync(indexFile, 'utf8'); } catch { return res.status(500).end(); }
+    const t = String((config.get().ui || {}).theme || 'auto');
+    res.set('Cache-Control', 'no-cache').type('html').send(html.replace('<html lang="en">', `<html lang="en" data-spp-theme="${/^[a-z-]+$/.test(t) ? t : 'auto'}">`));
+  });
   app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', maxAge: 0 }));
   app.use((req, res) => res.status(404).json({ error: 'not found' }));
 

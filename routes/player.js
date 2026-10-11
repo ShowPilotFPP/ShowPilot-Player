@@ -93,8 +93,8 @@ module.exports = function playerRoutes(ctx) {
       pluginRestart: plugins.restartFlag() > 0,
       rebootNeeded: plugins.rebootFlag() > 0,
       problems: [
-        ...(config.get().outputs || []).some((o) => o.enabled !== false) ? [] : ['No controller outputs are set up, so no lights are sent. Add them on Outputs, or in xLights FPP Connect set this player\'s "UDP Out" to "All".'],
-        ...require('../lib/health').missing().map((d) => `${d.bin} is not installed (${d.why}). Run System → System software to install it.`),
+        ...(config.get().outputs || []).some((o) => o.enabled !== false) ? [] : ['No controller outputs are set up, so no lights are sent. Add them under Lights → Controllers, or in xLights FPP Connect set this player\'s "UDP Out" to "All".'],
+        ...require('../lib/health').missing().map((d) => `${d.bin} is not installed (${d.why}). Install it under Settings → Updates → System software.`),
         ...(player.problems || []),
       ],
     };
@@ -174,12 +174,14 @@ module.exports = function playerRoutes(ctx) {
         return { name, ...i };
       } catch (e) { return { name, error: e.message }; }
     });
-    const size = (k, f) => { try { return fs.statSync(paths.fileIn(k, f)).size; } catch { return 0; } };
+    const stat = (k, f) => { try { const st = fs.statSync(paths.fileIn(k, f)); return { size: st.size, mtime: st.mtimeMs }; } catch { return { size: 0, mtime: 0 }; } };
+    for (const sq of sequences) Object.assign(sq, stat('sequences', sq.name));
     return {
       sequences,
-      music: ls('music').map((name) => ({ name, size: size('music', name) })),
-      videos: ls('videos').map((name) => ({ name, size: size('videos', name) })),
+      music: ls('music').map((name) => ({ name, ...stat('music', name) })),
+      videos: ls('videos').map((name) => ({ name, ...stat('videos', name) })),
       scripts: ls('scripts'),
+      scriptFiles: ls('scripts').map((name) => ({ name, ...stat('scripts', name) })),
       playlists: playlists.list().filter((n) => !n.startsWith('_')),
     };
   }));
