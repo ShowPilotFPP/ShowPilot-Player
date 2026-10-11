@@ -235,6 +235,16 @@
       banner.innerHTML = (STATUS.problems || []).map((p) => `<div class="problem">${esc(p)}</div>`).join('');
       $('#sideFoot').innerHTML = `${esc(STATUS.hostName)}<br>${STATUS.ips.map(esc).join(', ')}`;
       $('#brandVersion').textContent = 'v' + STATUS.version;
+      // The player was updated while this page was open: offer to load the new version.
+      const loadedV = document.documentElement.getAttribute('data-spp-version');
+      if (loadedV && STATUS.version && loadedV !== STATUS.version && !$('#updNotice')) {
+        const n = document.createElement('div');
+        n.id = 'updNotice';
+        n.className = 'problem upd-notice';
+        n.innerHTML = `<span>ShowPilot Player was updated to v${esc(STATUS.version)}.</span><button class="btn primary small" type="button">Reload</button>`;
+        $('button', n).onclick = () => location.reload();
+        $('.main').insertBefore(n, $('#problems') || $('#page'));
+      }
       if (current === 'dashboard') renderNow();
     } catch {}
   }

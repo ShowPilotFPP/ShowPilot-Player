@@ -123,7 +123,17 @@ async function main() {
   app.set('trust proxy', false);
   app.use('/api/player', require('./routes/player')(ctx));
   app.use('/api', require('./routes/fpp')(ctx));
-  const php = (req, res) => runPhp(path.join(FPPDIR, 'www', 'plugin.php'), req, res, { env: { FPPDIR, MEDIADIR: paths.MEDIA_DIR } });
+  // Cache buster: page assets are linked as "?v=<version>-<newest file time>",
+  // so a new version (or any changed file) is fetched without a hard refresh.
+  // Versioned requests are cached for good; anything else is revalidated.
+  const ASSET_V = (() => {
+    let newest = 0;
+    const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (e.isDirectory()) walk(f); else newest = Math.max(newest, fs.statSync(f).mtimeMs); } };
+    try { walk(path.join(__dirname, 'public')); walk(path.join(__dirname, 'fpp-compat', 'www')); } catch {}
+    return `${pkg.version}-${Math.floor(newest / 1000).toString(36)}`;
+  })();
+  ctx.assetVersion = ASSET_V;
+  const php = (req, res) => runPhp(path.join(FPPDIR, 'www', 'plugin.php'), req, res, { env: { FPPDIR, MEDIADIR: paths.MEDIA_DIR, SPP_ASSET_V: ASSET_V } });
   app.get('/plugin.php', php);
   app.post('/plugin.php', express.raw({ type: () => true, limit: '16mb' }), php);
   // The admin page carries the saved theme, so it opens in the right theme on
@@ -133,9 +143,15 @@ async function main() {
     let html;
     try { html = fs.readFileSync(indexFile, 'utf8'); } catch { return res.status(500).end(); }
     const t = String((config.get().ui || {}).theme || 'auto');
-    res.set('Cache-Control', 'no-cache').type('html').send(html.replace('<html lang="en">', `<html lang="en" data-spp-theme="${/^[a-z-]+$/.test(t) ? t : 'auto'}">`));
+    html = html.replace('<html lang="en">', `<html lang="en" data-spp-theme="${/^[a-z-]+$/.test(t) ? t : 'auto'}" data-spp-version="${pkg.version}">`)
+      .replace(/(src|href)="(\/[^"?#]+\.(?:js|css|svg))"/g, `$1="$2?v=${ASSET_V}"`);
+    res.set('Cache-Control', 'no-cache').type('html').send(html);
   });
-  app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', maxAge: 0 }));
+  app.use((req, res, next) => {
+    if (req.method === 'GET' || req.method === 'HEAD') res.set('Cache-Control', req.query.v ? 'public, max-age=31536000, immutable' : 'no-cache');
+    next();
+  });
+  app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', cacheControl: false }));
   app.use((req, res) => res.status(404).json({ error: 'not found' }));
 
   const port = Number(process.env.SPP_PORT) || config.get().web.port || 80;

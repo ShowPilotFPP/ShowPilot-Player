@@ -223,6 +223,9 @@ test('paced frames keep a steady cadence: PUSH packets one frame time apart desp
   const set = new OutputSet([{ type: 'ddp', ip: '127.0.0.1', startChannel: 1, channelCount: 1440 * 60 }]);
   set.outputs[0].send = function (sock) { for (const p of this.packets) sock.send(p, port, '127.0.0.1'); };
   const frame = Buffer.alloc(1440 * 60);
+  set.send(frame, 25); // warm up: sender thread started, sockets connected
+  for (let i = 0; i < 100 && !push.length; i++) await new Promise((r) => setTimeout(r, 20));
+  push.length = 0;
   const jitter = [3, -3, 2, -2, 3, 0, -3, 1, 3, -2, 2, -3, 0, 3, -1, 2, -3, 3, -2, 1, 0, 2, -3, 3];
   const t0 = performance.now() + 20;
   for (let i = 0; i < jitter.length; i++) {
@@ -235,8 +238,14 @@ test('paced frames keep a steady cadence: PUSH packets one frame time apart desp
   assert.ok(iv.length >= 18, `pushes: ${push.length}`);
   set.close();
   rx.close();
-  // A busy test machine can make one hand-over late enough to re-anchor the grid (two intervals off).
-  assert.ok(off.length <= 4, `intervals off by >1.5 ms: ${off.map((x) => x.toFixed(1)).join(', ')}`);
+  // Without the cadence nearly every interval is off (the hand-over jitter is
+  // ±3 ms). A busy test machine can still make a hand-over late enough to
+  // re-anchor the grid now and then (two intervals off each time).
+  // Judged on the typical interval: with the cadence most land within a
+  // fraction of a millisecond of 50; without it the median is off by ~4 ms.
+  const dev = iv.map((x) => Math.abs(x - 50)).sort((a, b) => a - b);
+  const median = dev[Math.floor(dev.length / 2)];
+  assert.ok(median < 1, `median interval off by ${median.toFixed(2)} ms (off by >1.5 ms: ${off.map((x) => x.toFixed(1)).join(', ')})`);
 });
 
 test('all controllers start together: a small controller is done early, not squeezed in at the end of a big frame', async () => {

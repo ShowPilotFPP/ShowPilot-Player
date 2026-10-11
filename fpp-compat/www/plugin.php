@@ -60,7 +60,10 @@ if (!$nopage) {
     $theme = is_array($cfg) && isset($cfg['ui']['theme']) && preg_match('/^[a-z-]+$/', $cfg['ui']['theme']) ? $cfg['ui']['theme'] : 'auto';
     $t = htmlspecialchars($title, ENT_QUOTES);
     $p = htmlspecialchars($pluginName, ENT_QUOTES);
-    $v = '?v=' . rawurlencode((string)@filemtime(__FILE__));
+    // The player's cache buster (version + newest file time), so plugin pages
+    // pick up a new version without a hard refresh.
+    $av = getenv('SPP_ASSET_V');
+    $v = '?v=' . rawurlencode($av ? $av : (string)@filemtime(__FILE__));
     $reqUri = isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : '';
     echo "<!DOCTYPE html>\n<html lang=\"en\" data-spp-theme=\"" . htmlspecialchars($theme, ENT_QUOTES) . "\"><head><meta charset=\"utf-8\">",
         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>$t - ShowPilot Player</title>\n",
@@ -68,7 +71,7 @@ if (!$nopage) {
         "<link rel=\"stylesheet\" href=\"/vendor/bootstrap/bootstrap.min.css\">\n",
         "<link rel=\"stylesheet\" href=\"/vendor/jquery-ui/jquery-ui.min.css\">\n",
         "<link rel=\"stylesheet\" href=\"/vendor/fontawesome/css/all.min.css\"><link rel=\"stylesheet\" href=\"/vendor/fontawesome/css/v4-shims.min.css\">\n",
-        "<link rel=\"stylesheet\" href=\"/themes.css$v\"><link rel=\"stylesheet\" href=\"/vendor/fonts/fonts.css\"><link rel=\"stylesheet\" href=\"/fpp-compat/plugin-page.css$v\">\n",
+        "<link rel=\"stylesheet\" href=\"/themes.css$v\"><link rel=\"stylesheet\" href=\"/vendor/fonts/fonts.css$v\"><link rel=\"stylesheet\" href=\"/fpp-compat/plugin-page.css$v\">\n",
         "<script src=\"/vendor/jquery.min.js\"></script><script src=\"/vendor/jquery-ui/jquery-ui.min.js\"></script>\n",
         "<script src=\"/vendor/bootstrap/bootstrap.bundle.min.js\"></script>\n",
         "<script>\nvar FPP_FULL_VERSION = '10.0', FPP_VERSION = '10.0', FPP_MAJOR_VERSION = 10, FPP_MINOR_VERSION = 0, FPP_VERSION_FLOAT = 10.0, FPP_PATCH_VERSION = 0;\n",

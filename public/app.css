@@ -441,3 +441,6 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 .btn.bad:hover { filter: brightness(1.1); }
 @keyframes dlg-fade { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .dlg-wrap { animation: none; } .spn-rail, .spn-label, .spn-fill { transition: none !important; } .spn-tally i { animation: none; } }
+
+.upd-notice { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; border-color: var(--status-success); background: var(--status-success-soft); }
+.upd-notice span { flex: 1; }
