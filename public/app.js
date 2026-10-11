@@ -109,7 +109,34 @@
   $('#scrim').addEventListener('click', () => setMenu(false));
   $('#scrim').addEventListener('touchstart', (ev) => { ev.preventDefault(); setMenu(false); }, { passive: false });
   document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') setMenu(false); });
-  $('#nav').addEventListener('click', (ev) => { if (ev.target.closest('a')) setMenu(false); });
+  $('#nav').addEventListener('click', (ev) => {
+    const a = ev.target.closest('a');
+    if (!a) return;
+    setMenu(false);
+    if (ev.detail > 0) a.blur(); // a mouse click: let the rail collapse when the pointer leaves
+  });
+  // Theme picker in the top bar, like ShowPilot's admin. Saved with the player's settings.
+  if (window.SPPTheme) {
+    const ts = $('#themeSelect');
+    ts.innerHTML = SPPTheme.list.map(([v, l]) => `<option value="${v}">${esc(l.replace(' (follow this device)', ''))}</option>`).join('');
+    ts.value = SPPTheme.current();
+    ts.onchange = async () => {
+      SPPTheme.set(ts.value);
+      try { await api('PUT', P('/config'), { ui: { theme: ts.value } }); if (CONFIG) CONFIG.ui = { ...(CONFIG.ui || {}), theme: ts.value }; } catch {}
+      const sys = $('#theme'); if (sys) sys.value = ts.value;
+    };
+  } else $('#themeSelect').hidden = true;
+  // "Keep menu open" (ShowPilot's pinned rail), remembered per browser.
+  const setPinned = (on) => {
+    document.body.classList.toggle('rail-pinned', on);
+    const b = $('#spnPin');
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    $('.spn-label', b).textContent = on ? 'Collapse menu' : 'Keep menu open';
+    $('path', b).setAttribute('d', on ? 'M15 6l-6 6 6 6' : 'M9 6l6 6-6 6');
+    try { localStorage.setItem('spp_rail_pinned', on ? '1' : '0'); } catch {}
+  };
+  try { if (localStorage.getItem('spp_rail_pinned') === '1') setPinned(true); } catch {}
+  $('#spnPin').addEventListener('click', (ev) => { setPinned(!document.body.classList.contains('rail-pinned')); if (ev.detail > 0) ev.currentTarget.blur(); });
 
   // Top bar status, refreshed everywhere.
   async function pollStatus() {
@@ -117,17 +144,18 @@
       STATUS = await api('GET', P('/status'));
       const p = STATUS.player;
       const live = p.state === 'playing';
-      $('.brand .dot').classList.toggle('live', live);
+      $('#liveDot').classList.toggle('live', live);
       const sp = STATUS.showpilot;
       $('#topStatus').innerHTML = [
-        live ? `<span class="pill ok">Playing</span> ${esc(p.sequence || p.media)}` : `<span class="pill">Idle</span>`,
-        STATUS.mode === 'remote' ? '<span class="pill warn">Remote mode</span>' : '',
-        sp.enabled ? `<span class="pill ${sp.connected ? 'ok' : 'bad'}">ShowPilot ${sp.connected ? 'connected' : 'offline'}</span>` : '',
-      ].join(' ');
+        live ? `<span class="spn-chip ok"><i class="dot live"></i><span>${esc(p.sequence || p.media)}</span></span>` : '<span class="spn-chip"><i class="dot"></i><span>Idle</span></span>',
+        STATUS.mode === 'remote' ? '<span class="spn-chip warn"><span>Remote mode</span></span>' : '',
+        sp.enabled ? `<span class="spn-chip ${sp.connected ? 'ok' : 'bad'}"><span>ShowPilot ${sp.connected ? 'connected' : 'offline'}</span></span>` : '',
+      ].join('');
       let banner = $('#problems');
       if (!banner) { banner = document.createElement('div'); banner.id = 'problems'; $('.main').insertBefore(banner, $('#page')); }
       banner.innerHTML = (STATUS.problems || []).map((p) => `<div class="problem">${esc(p)}</div>`).join('');
-      $('#sideFoot').innerHTML = `v${esc(STATUS.version)} · ${esc(STATUS.hostName)}<br>${STATUS.ips.map(esc).join(', ')}`;
+      $('#sideFoot').innerHTML = `${esc(STATUS.hostName)}<br>${STATUS.ips.map(esc).join(', ')}`;
+      $('#brandVersion').textContent = 'v' + STATUS.version;
       if (current === 'dashboard') renderNow();
     } catch {}
   }
@@ -137,10 +165,10 @@
   PAGES.dashboard = async (el) => {
     await loadLib();
     el.innerHTML = `
-      <div class="grid g2">
-        <div class="card now" id="nowCard"></div>
-        <div class="card">
-          <h3>Play</h3>
+      <div class="dash-row">
+        <section class="card spn-onair" id="nowCard" aria-live="polite"></section>
+        <section class="card dash-play">
+          <h2>Play</h2>
           <div class="row">
             <select id="dashPl" style="max-width:100%">${LIB.playlists.length || LIB.sequences.length ? '' : '<option value="">Nothing uploaded yet</option>'}
               ${LIB.playlists.length ? `<optgroup label="Playlists">${LIB.playlists.map((n) => `<option value="pl:${esc(n)}">${esc(n)}</option>`).join('')}</optgroup>` : ''}
@@ -149,9 +177,8 @@
             <label class="inline"><input type="checkbox" id="dashRepeat" checked> Repeat</label>
             <button class="btn primary" id="dashStart">Start</button>
           </div>
-          <p class="muted" id="dashNext"></p>
-          <p class="muted" id="dashSched"></p>
-        </div>
+          <div class="dash-next"><p class="muted" id="dashNext"></p><p class="muted" id="dashSched"></p></div>
+        </section>
       </div>
       <div class="card"><h3>Timing</h3><div class="stats" id="timing"></div>
         <p class="dim" style="margin:10px 0 0">Lights follow the audio clock. "Late" is how far after its due time a frame left; frames are never queued, a late wake-up skips straight to the right frame.</p></div>`;
@@ -179,12 +206,14 @@
     const p = STATUS.player, pl = STATUS.playlist;
     const live = p.state === 'playing';
     const pct = p.durationMs ? Math.min(100, (p.positionMs / p.durationMs) * 100) : 0;
+    const where = `${pl.name && !pl.name.startsWith('_') ? `${esc(pl.name)} · ${pl.index} of ${pl.size}` : ''}${pl.breadcrumbs && pl.breadcrumbs.length ? ` · interrupted ${esc(pl.breadcrumbs.join(' › '))}` : ''}`;
     card.innerHTML = `
-      <span class="muted">${live ? 'Now playing' : pl.paused ? 'Paused' : 'Idle'}${pl.name && !pl.name.startsWith('_') ? ` · ${esc(pl.name)} (${pl.index}/${pl.size})` : ''}${pl.breadcrumbs && pl.breadcrumbs.length ? ` · interrupted ${esc(pl.breadcrumbs.join(' › '))}` : ''}</span>
-      <div class="now-title">${esc(p.sequence || p.media || '—')}</div>
-      <div class="muted">${p.sequence && p.media ? esc(p.media) : ''}${p.video ? ` · video ${esc(p.video)}` : ''}</div>
-      <div class="bar"><i style="width:${pct}%"></i></div>
-      <div class="times"><span>${fmt(p.positionMs)}</span><span>${fmt(p.durationMs)}</span></div>
+      <span class="spn-tally ${live ? '' : pl.paused ? 'paused' : 'off'}"><i></i>${live ? 'ON AIR' : pl.paused ? 'PAUSED' : 'OFF AIR'}</span>
+      ${where ? `<span class="muted">${where}</span>` : ''}
+      <div><h2 class="spn-title ${p.sequence || p.media ? '' : 'idle'}">${esc((p.sequence || p.media || 'Nothing playing').replace(/\.fseq$/i, ''))}</h2>
+      <div class="spn-artist">${p.sequence || p.media ? `${p.sequence && p.media ? esc(p.media) : ''}${p.video ? ` · video ${esc(p.video)}` : ''}` : 'The show is idle.'}</div></div>
+      <div><div class="spn-track"><div class="spn-fill" style="width:${pct}%"></div></div>
+      <div class="spn-times"><span>${fmt(p.positionMs)}</span><span>${fmt(p.durationMs)}</span></div></div>
       <div class="transport">
         <button class="btn" data-t="prev">Prev</button>
         <button class="btn" data-t="pause">${pl.paused ? 'Resume' : 'Pause'}</button>
@@ -212,7 +241,7 @@
       ['Output send', w.outputs && w.outputs.sender ? `${w.outputs.sender.maxSendMs.toFixed(1)} ms${w.outputs.pacingMbps ? ` @ ${w.outputs.pacingMbps} Mbit/s` : ' (unpaced)'}` : '—'],
       ['Output frames dropped', w.outputs ? w.outputs.droppedFrames : 0],
       ['Audio out', p.audioOut || '—'], ['Display', p.display], ['MultiSync', STATUS.multisync.sending ? 'sending' : STATUS.mode === 'remote' ? `following ${STATUS.multisync.lastMaster || '—'}` : 'off'],
-    ].map(([k, v]) => `<div class="stat"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join('');
+    ].map(([k, v]) => `<div class="stat"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('');
   }
 
   // ---------------------------------------------------------------- playlists
@@ -1431,7 +1460,7 @@
         <div class="row"><label class="btn" for="bkFile" style="display:inline-flex">Choose backup file…</label><input type="file" id="bkFile" accept=".json,application/json" hidden><span class="dim" id="bkName">In FPP: Content Setup → File Manager → Backups, or Status/Control → Backups → Download.</span></div>
         <div id="bkBody"></div></div>
       <div class="card"><div class="row"><h3 style="margin:0">Log</h3><span class="spacer"></span><button class="btn small" id="refLog">Refresh</button></div><pre class="logs mono" id="log"></pre></div>`;
-    $('#theme').onchange = (ev) => { if (window.SPPTheme) SPPTheme.set(ev.target.value); };
+    $('#theme').onchange = (ev) => { if (window.SPPTheme) SPPTheme.set(ev.target.value); const ts = $('#themeSelect'); if (ts) ts.value = ev.target.value; };
     $('#saveSys').onclick = guard(async () => {
       if ($('#tz').value && $('#tz').value !== tz.current) await api('PUT', P('/timezone'), { timezone: $('#tz').value });
       await saveConfig({ hostName: $('#host').value.trim(), hostDescription: $('#desc').value, audioDevice: $('#adev').value, ui: { theme: $('#theme').value } });
@@ -1489,7 +1518,7 @@
 
   // ---------------------------------------------------------------- boot
   // The theme is saved with the player's settings; follow it on every device.
-  api('GET', P('/config')).then((c) => { CONFIG = CONFIG || c; if (window.SPPTheme && c.ui && c.ui.theme && c.ui.theme !== SPPTheme.current()) SPPTheme.set(c.ui.theme); }).catch(() => {});
+  api('GET', P('/config')).then((c) => { CONFIG = CONFIG || c; if (window.SPPTheme && c.ui && c.ui.theme && c.ui.theme !== SPPTheme.current()) { SPPTheme.set(c.ui.theme); const ts = $('#themeSelect'); if (ts) ts.value = c.ui.theme; } }).catch(() => {});
   pollStatus();
   route();
 })();

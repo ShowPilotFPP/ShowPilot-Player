@@ -8,45 +8,50 @@
 <script src="/theme.js"></script>
 <link rel="stylesheet" href="/themes.css">
 <link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
 <div id="login" class="login" hidden>
   <form id="loginForm" class="card login-card">
-    <h1>ShowPilot Player</h1>
+    <div class="spn-brand login-brand"><div class="spn-mark" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div><div class="spn-brand-name">ShowPilot <span class="accent">Player</span></div></div>
     <label>Password <input type="password" id="loginPw" autocomplete="current-password" required></label>
     <button class="btn primary" type="submit">Sign in</button>
     <p class="err" id="loginErr"></p>
   </form>
 </div>
 
-<div class="shell" id="shell">
-  <aside class="side" id="side">
-    <div class="brand"><span class="dot"></span><span class="brand-name">ShowPilot <b>Player</b></span></div>
-    <nav id="nav">
-      <a href="#dashboard" data-page="dashboard">Dashboard</a>
-      <a href="#playlists" data-page="playlists">Playlists</a>
-      <a href="#files" data-page="files">Files</a>
-      <a href="#schedule" data-page="schedule">Schedule</a>
-      <a href="#commands" data-page="commands">Commands</a>
-      <a href="#outputs" data-page="outputs">Outputs</a>
-      <a href="#display" data-page="display">Video &amp; Matrix</a>
-      <a href="#multisync" data-page="multisync">MultiSync</a>
-      <a href="#showpilot" data-page="showpilot">ShowPilot</a>
-      <a href="#plugins" data-page="plugins">Plugins</a>
-      <a href="#system" data-page="system">System</a>
-    </nav>
-    <div class="side-foot" id="sideFoot"></div>
-  </aside>
-  <div class="scrim" id="scrim" aria-hidden="true"></div>
-  <main class="main">
-    <header class="top">
-      <button class="icon-btn" id="menuBtn" aria-label="Menu">&#9776;</button>
-      <h2 id="pageTitle">Dashboard</h2>
-      <div class="top-status" id="topStatus"></div>
-    </header>
-    <section id="page" class="page"></section>
-  </main>
+<aside class="spn-rail" id="side" aria-label="Main">
+  <div class="spn-brand"><div class="spn-mark" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+    <div class="spn-label"><div class="spn-brand-name">ShowPilot <span class="accent">Player</span></div><div class="spn-brand-version" id="brandVersion"></div></div></div>
+  <nav class="spn-nav" id="nav">
+      <a class="spn-item" href="#dashboard" data-page="dashboard" title="Dashboard"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h7v7H4zM13 4h7v4h-7zM13 10h7v10h-7zM4 13h7v7H4z"/></svg><span class="spn-label">Dashboard</span></a>
+      <a class="spn-item" href="#playlists" data-page="playlists" title="Playlists"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h7M17 15v6M14 18h6"/></svg><span class="spn-label">Playlists</span></a>
+      <a class="spn-item" href="#files" data-page="files" title="Files"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h6"/></svg><span class="spn-label">Files</span></a>
+      <a class="spn-item" href="#schedule" data-page="schedule" title="Schedule"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3v3M17 3v3M4 8h16M5 5h14a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM12 12v3l2 1"/></svg><span class="spn-label">Schedule</span></a>
+      <a class="spn-item" href="#commands" data-page="commands" title="Commands"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-6-6-6M12 19h8"/></svg><span class="spn-label">Commands</span></a>
+      <a class="spn-item" href="#outputs" data-page="outputs" title="Outputs"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h3M16 12h3M12 5v3M12 16v3M12 12h.01M7 7l2 2M15 15l2 2M17 7l-2 2M9 15l-2 2"/></svg><span class="spn-label">Outputs</span></a>
+      <a class="spn-item" href="#display" data-page="display" title="Video &amp; Matrix"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18v12H3zM8 21h8M12 17v4"/></svg><span class="spn-label">Video &amp; Matrix</span></a>
+      <a class="spn-item" href="#multisync" data-page="multisync" title="MultiSync"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 1-15.4 6.4L3 16M3 12a9 9 0 0 1 15.4-6.4L21 8M21 3v5h-5M3 21v-5h5"/></svg><span class="spn-label">MultiSync</span></a>
+      <a class="spn-item" href="#showpilot" data-page="showpilot" title="ShowPilot"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zM11 18h2"/></svg><span class="spn-label">ShowPilot</span></a>
+      <a class="spn-item" href="#plugins" data-page="plugins" title="Plugins"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/></svg><span class="spn-label">Plugins</span></a>
+      <a class="spn-item" href="#system" data-page="system" title="System"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 15a2 2 0 1 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 9 4.6V4a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span class="spn-label">System</span></a>
+  </nav>
+  <div class="spn-foot">
+    <div class="spn-status" title="Player"><span class="dot" id="liveDot"></span><span class="spn-label" id="sideFoot"></span></div>
+    <button type="button" class="spn-item" id="spnPin" aria-pressed="false"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg><span class="spn-label">Keep menu open</span></button>
+  </div>
+</aside>
+<div class="scrim" id="scrim" aria-hidden="true"></div>
+<div class="main">
+  <header class="spn-top">
+    <button type="button" class="spn-menu-btn" id="menuBtn" aria-label="Open menu" aria-controls="side"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    <div><h1 id="pageTitle">Dashboard</h1></div>
+    <span class="spn-spacer"></span>
+    <div class="top-status" id="topStatus"></div>
+    <select id="themeSelect" class="theme-select" title="Theme" aria-label="Theme"></select>
+  </header>
+  <section id="page" class="page"></section>
 </div>
 <div id="toasts" class="toasts"></div>
 <script src="/app.js"></script>

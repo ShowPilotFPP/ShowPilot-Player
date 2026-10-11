@@ -68,7 +68,7 @@ if (!$nopage) {
         "<link rel=\"stylesheet\" href=\"/vendor/bootstrap/bootstrap.min.css\">\n",
         "<link rel=\"stylesheet\" href=\"/vendor/jquery-ui/jquery-ui.min.css\">\n",
         "<link rel=\"stylesheet\" href=\"/vendor/fontawesome/css/all.min.css\"><link rel=\"stylesheet\" href=\"/vendor/fontawesome/css/v4-shims.min.css\">\n",
-        "<link rel=\"stylesheet\" href=\"/themes.css$v\"><link rel=\"stylesheet\" href=\"/fpp-compat/plugin-page.css$v\">\n",
+        "<link rel=\"stylesheet\" href=\"/themes.css$v\"><link rel=\"stylesheet\" href=\"/vendor/fonts/fonts.css\"><link rel=\"stylesheet\" href=\"/fpp-compat/plugin-page.css$v\">\n",
         "<script src=\"/vendor/jquery.min.js\"></script><script src=\"/vendor/jquery-ui/jquery-ui.min.js\"></script>\n",
         "<script src=\"/vendor/bootstrap/bootstrap.bundle.min.js\"></script>\n",
         "<script>\nvar FPP_FULL_VERSION = '10.0', FPP_VERSION = '10.0', FPP_MAJOR_VERSION = 10, FPP_MINOR_VERSION = 0, FPP_VERSION_FLOAT = 10.0, FPP_PATCH_VERSION = 0;\n",
