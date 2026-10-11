@@ -79,6 +79,20 @@
   window.DialogOK = function (title, message) {
     window.DoModalDialog({ id: 'sppDialogOK', title: esc(title || ''), body: String(message || ''), buttons: { OK: function () { window.CloseModalDialog('sppDialogOK'); } } });
   };
+  // Plugins' own alert() calls show as a themed dialog instead of the
+  // browser's box. (alert() doesn't wait for OK here; plugins only use it to
+  // tell the user something, so nothing depends on that. confirm() and
+  // prompt() must return an answer right away, so those stay native.)
+  var alertCount = 0;
+  window.alert = function (message) {
+    var id = 'sppAlert' + (++alertCount);
+    var t = $('.spp-bar .spp-title').first().text() || 'Notice';
+    try {
+      window.DoModalDialog({ id: id, title: esc(t), body: '<p style="white-space:pre-wrap;margin:0">' + esc(message == null ? '' : message) + '</p>',
+        buttons: { OK: { click: function () { window.CloseModalDialog(id); }, 'class': 'btn-primary' } } });
+      $('#' + id).one('hidden.bs.modal', function () { var m = bootstrap.Modal.getInstance(this); if (m) m.dispose(); $(this).remove(); });
+    } catch (e) { toast(String(message == null ? '' : message)); }
+  };
   window.DialogError = function (title, message) { toast((title ? title + ': ' : '') + $('<div>').html(String(message || '')).text(), 'err'); };
 
   // FPP's fppDialog() is a modal wrapper with jQuery UI dialog options.

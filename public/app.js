@@ -35,6 +35,31 @@
   const P = (path) => '/api/player' + path;
   const guard = (fn) => async (...a) => { try { await fn(...a); } catch (e) { toast(e.message, true); } };
 
+  // In-page confirm dialog (instead of the browser's confirm()). Resolves
+  // true for the confirm button, false for Cancel / Escape / clicking outside.
+  function ask(message, { title = 'Are you sure?', ok = 'OK', danger = false } = {}) {
+    return new Promise((resolve) => {
+      const prev = document.activeElement;
+      const wrap = document.createElement('div');
+      wrap.className = 'dlg-wrap';
+      wrap.innerHTML = `<div class="dlg card" role="alertdialog" aria-modal="true" aria-labelledby="dlgT" aria-describedby="dlgM">
+        <h3 id="dlgT">${esc(title)}</h3><p id="dlgM">${esc(message)}</p>
+        <div class="dlg-actions"><button type="button" class="btn" data-a="0">Cancel</button><button type="button" class="btn ${danger ? 'bad' : 'primary'}" data-a="1">${esc(ok)}</button></div></div>`;
+      const done = (v) => { document.removeEventListener('keydown', key, true); wrap.remove(); if (prev && prev.focus) prev.focus(); resolve(v); };
+      const key = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(false); }
+        else if (e.key === 'Tab') { // keep focus inside the dialog
+          const b = $$('button', wrap); const i = b.indexOf(document.activeElement);
+          e.preventDefault(); b[(i + (e.shiftKey ? b.length - 1 : 1)) % b.length].focus();
+        }
+      };
+      wrap.addEventListener('click', (e) => { if (e.target === wrap) done(false); const a = e.target.closest('[data-a]'); if (a) done(a.dataset.a === '1'); });
+      document.addEventListener('keydown', key, true);
+      document.body.appendChild(wrap);
+      $('[data-a="1"]', wrap).focus();
+    });
+  }
+
   let CONFIG = null;
   let LIB = null;
   let STATUS = null;
@@ -391,7 +416,7 @@
       document.addEventListener('click', () => { if ($('#plMenu')) $('#plMenu').hidden = true; }, { once: true });
       $$('#plMenu [data-m]').forEach((b) => (b.onclick = guard(async () => {
         if (b.dataset.m === 'del') {
-          if (!confirm(`Delete the playlist "${pl.name}"? Schedule entries that use it will stop working.`)) return;
+          if (!(await ask(`Schedule entries that use "${pl.name}" will stop working.`, { title: 'Delete playlist?', ok: 'Delete', danger: true }))) return;
           await api('DELETE', `/api/playlist/${encodeURIComponent(pl.name)}`);
           toast('Playlist deleted'); location.hash = '#playlists';
         } else {
@@ -558,7 +583,7 @@
     $('#pick').addEventListener('change', (e) => handle([...e.target.files]));
     $$('[data-del]', el).forEach((b) => (b.onclick = guard(async () => {
       const [d, n] = b.dataset.del.split('/');
-      if (!confirm(`Delete ${n}?`)) return;
+      if (!(await ask(`${n} will be removed from the player.`, { title: 'Delete file?', ok: 'Delete', danger: true }))) return;
       await api('DELETE', `/api/file/${d}/${encodeURIComponent(n)}`);
       PAGES.files(el);
     })));
@@ -733,7 +758,7 @@
         const i = +row.dataset.i;
         $('[data-run]', row).onclick = guard(async () => { const r = await api('POST', P('/presets/run'), { name: presets[i].name }); toast(`${presets[i].name}: ${r.result}`); });
         $('[data-edit]', row).onclick = () => { editing = i; draft = clone(presets[i]); render(); };
-        $('[data-del]', row).onclick = guard(async () => { if (!confirm(`Delete the preset "${presets[i].name}"?`)) return; presets.splice(i, 1); await savePresets(); toast('Preset deleted'); render(); });
+        $('[data-del]', row).onclick = guard(async () => { if (!(await ask(`The preset "${presets[i].name}" and its commands will be removed.`, { title: 'Delete preset?', ok: 'Delete', danger: true }))) return; presets.splice(i, 1); await savePresets(); toast('Preset deleted'); render(); });
       });
       if (editing !== null) {
         renderCmds();
@@ -1028,7 +1053,7 @@
         $('[data-toggle]', row).onchange = guard(async (ev) => { const list = clone(view.entries); list[i].enabled = ev.target.checked; await save(list, ev.target.checked ? 'Entry on' : 'Entry off'); render(); });
         $('[data-edit]', row).onclick = () => { editing = id; draft = clone(e); render(); };
         $('[data-dup]', row).onclick = () => { editing = 'new'; draft = { ...clone(e), id: undefined }; render(); };
-        $('[data-del]', row).onclick = guard(async () => { if (!confirm(`Delete "${title(e)}" from the schedule?`)) return; const list = view.entries.filter((x) => x.id !== id); await save(list, 'Entry deleted'); render(); });
+        $('[data-del]', row).onclick = guard(async () => { if (!(await ask(`"${title(e)}" will be removed from the schedule.`, { title: 'Delete schedule entry?', ok: 'Delete', danger: true }))) return; const list = view.entries.filter((x) => x.id !== id); await save(list, 'Entry deleted'); render(); });
         $$('[data-mv]', row).forEach((b) => (b.onclick = guard(async () => {
           const j = i + +b.dataset.mv; if (j < 0 || j >= view.entries.length) return;
           const list = view.entries.slice(); [list[i], list[j]] = [list[j], list[i]]; await save(list); render();
@@ -1270,7 +1295,7 @@
         finally { render(); }
       })));
       $$('[data-rm]', el).forEach((b) => (b.onclick = guard(async () => {
-        if (!confirm(`Uninstall ${b.dataset.rm}? Its settings file is kept.`)) return;
+        if (!(await ask(`${b.dataset.rm} will be removed. Its settings file is kept.`, { title: 'Uninstall plugin?', ok: 'Uninstall', danger: true }))) return;
         await api('DELETE', P(`/plugins/${encodeURIComponent(b.dataset.rm)}`)); toast('Uninstalled');
         list = await api('GET', P('/plugins')); render();
       })));
@@ -1348,7 +1373,7 @@
         $$('.bk-sec', body).forEach((sec) => { selection[sec.dataset.sec] = $$('[data-item]:checked', sec).map((b) => b.dataset.item); });
         const mode = $('[data-mode] .on', body);
         selection.scheduleMode = mode ? mode.dataset.v : 'replace';
-        if (selection.schedule && selection.schedule.length && selection.scheduleMode === 'replace' && !confirm('Replace your current schedule with the selected entries?')) return;
+        if (selection.schedule && selection.schedule.length && selection.scheduleMode === 'replace' && !(await ask('Your current schedule will be replaced with the selected entries.', { title: 'Replace schedule?', ok: 'Replace', danger: true }))) return;
         $('#bkGo').disabled = true;
         try {
           const r = await api('POST', P('/backup/restore'), { backup, selection });
@@ -1407,9 +1432,9 @@
       await saveConfig({ hostName: $('#host').value.trim(), hostDescription: $('#desc').value, audioDevice: $('#adev').value, ui: { theme: $('#theme').value } });
     });
     $('#setPw').onclick = guard(async () => { await api('POST', P('/auth/password'), { password: $('#pw').value }); toast('Password set'); PAGES.system(el); });
-    if ($('#clrPw')) $('#clrPw').onclick = guard(async () => { if (!confirm('Remove the admin password?')) return; await api('POST', P('/auth/password'), { password: '' }); toast('Password removed'); PAGES.system(el); });
+    if ($('#clrPw')) $('#clrPw').onclick = guard(async () => { if (!(await ask('Anyone on your network will be able to open this admin page.', { title: 'Remove the admin password?', ok: 'Remove', danger: true }))) return; await api('POST', P('/auth/password'), { password: '' }); toast('Password removed'); PAGES.system(el); });
     if ($('#logout')) $('#logout').onclick = guard(async () => { await api('POST', P('/auth/logout')); location.reload(); });
-    $$('[data-sys]', el).forEach((b) => (b.onclick = guard(async () => { if (!confirm(`${b.textContent}?`)) return; await api('POST', P(`/system/${b.dataset.sys}`)); toast(`${b.textContent} requested`); })));
+    $$('[data-sys]', el).forEach((b) => (b.onclick = guard(async () => { if (!(await ask(b.dataset.sys === 'shutdown' ? 'The player turns off. You will need to unplug it and plug it back in to start it again.' : 'The show stops while the player restarts.', { title: `${b.textContent.trim()}?`, ok: b.textContent.trim(), danger: true }))) return; await api('POST', P(`/system/${b.dataset.sys}`)); toast(`${b.textContent} requested`); })));
     // System software update: check, run, then follow the log until it finishes.
     const sysShow = (st) => {
       const box = $('#sysUpd'), lg = $('#sysLog');
@@ -1435,7 +1460,7 @@
       } finally { $('#sysChk').disabled = false; }
     });
     $('#sysRun').onclick = guard(async () => {
-      if (!confirm('Update system software now? It can take several minutes; the show must be stopped.')) return;
+      if (!(await ask('It can take several minutes. The show must be stopped.', { title: 'Update system software now?', ok: 'Update' }))) return;
       sysShow(await api('POST', P('/system-update')));
       setTimeout(sysPoll, 1500);
     });
@@ -1450,8 +1475,8 @@
         $('#upd').innerHTML = `<p>Installed: <b>${esc(u.current)}</b> · Latest: <b>${esc(u.latest || 'unknown')}</b></p>
           <div class="row">${u.updateAvailable ? '<button class="btn primary" id="doUpd">Install update</button>' : '<span class="pill ok">Up to date</span>'}<button class="btn" id="chk">Check again</button>${u.canRollback ? '<button class="btn" id="rb">Roll back</button>' : ''}</div>`;
         $('#chk').onclick = () => upd(true);
-        if ($('#doUpd')) $('#doUpd').onclick = guard(async () => { if (!confirm('Install the update? The show stops while the player restarts.')) return; await api('POST', P('/updates/apply')); toast('Updating; the page reconnects when the player is back'); });
-        if ($('#rb')) $('#rb').onclick = guard(async () => { if (!confirm('Go back to the previous version?')) return; await api('POST', P('/updates/rollback')); toast('Rolling back'); });
+        if ($('#doUpd')) $('#doUpd').onclick = guard(async () => { if (!(await ask('The show stops while the player restarts.', { title: 'Install the update?', ok: 'Install' }))) return; await api('POST', P('/updates/apply')); toast('Updating; the page reconnects when the player is back'); });
+        if ($('#rb')) $('#rb').onclick = guard(async () => { if (!(await ask('The player restarts on the version it had before the last update.', { title: 'Go back to the previous version?', ok: 'Roll back', danger: true }))) return; await api('POST', P('/updates/rollback')); toast('Rolling back'); });
       } catch (e) { $('#upd').innerHTML = `<p class="err">${esc(e.message)}</p><button class="btn" id="chk">Try again</button>`; $('#chk').onclick = () => upd(true); }
     };
     upd(false);
