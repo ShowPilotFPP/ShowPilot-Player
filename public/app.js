@@ -80,7 +80,15 @@
 
   // Audio preview (Files page); stopped when leaving the page.
   const PREVIEW = { audio: null, name: null };
-  function stopPreview() { if (PREVIEW.audio) { try { PREVIEW.audio.pause(); PREVIEW.audio.src = ''; } catch {} } PREVIEW.audio = null; PREVIEW.name = null; }
+  function stopPreview() {
+    const a = PREVIEW.audio;
+    PREVIEW.audio = null; PREVIEW.name = null;
+    if (!a) return;
+    // Detach first: clearing the source fires an 'error' event on the old
+    // element, which must not stop the next preview (0.4.1 bug).
+    a.onended = a.onerror = a.ontimeupdate = null;
+    try { a.pause(); a.removeAttribute('src'); a.load(); } catch {}
+  }
 
   // ---------------------------------------------------------------- router
   const PAGES = {};
@@ -636,10 +644,11 @@
       PREVIEW.audio = a; PREVIEW.name = name;
       b.classList.add('primary');
       b.innerHTML = '<i class="fas fa-stop"></i> Stop';
-      a.ontimeupdate = () => { const x = previewBtn(name); if (x && PREVIEW.name === name) x.innerHTML = `<i class="fas fa-stop"></i> ${fmt(a.currentTime * 1000)}`; };
-      a.onended = () => { stopPreview(); resetPreviewBtns(); };
-      a.onerror = () => { stopPreview(); resetPreviewBtns(); toast(`Can't play ${name} in this browser`, true); };
-      a.play().catch((e) => { stopPreview(); resetPreviewBtns(); toast(e.message, true); });
+      const mine = () => PREVIEW.audio === a; // ignore events from a preview that was already replaced
+      a.ontimeupdate = () => { const x = previewBtn(name); if (x && mine()) x.innerHTML = `<i class="fas fa-stop"></i> ${fmt(a.currentTime * 1000)}`; };
+      a.onended = () => { if (!mine()) return; stopPreview(); resetPreviewBtns(); };
+      a.onerror = () => { if (!mine()) return; stopPreview(); resetPreviewBtns(); toast(`Can't play ${name} in this browser`, true); };
+      a.play().catch((e) => { if (!mine() || e.name === 'AbortError') return; stopPreview(); resetPreviewBtns(); toast(e.message, true); });
     }));
     $$('[data-play-seq]', el).forEach((b) => (b.onclick = guard(async () => {
       await api('POST', P('/play'), { sequence: b.dataset.playSeq, media: b.dataset.media || undefined });
