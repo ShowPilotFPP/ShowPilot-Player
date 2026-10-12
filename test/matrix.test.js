@@ -59,6 +59,13 @@ test('virtual matrix shows a sparse sequence at its show channel numbers', { ski
     assert.deepEqual(px(W - 10, 10), [0, 255, 0], 'top right: green');
     assert.deepEqual(px(10, H - 10), [255, 0, 0], 'bottom left: red');
     assert.deepEqual(px(W - 10, H - 10), [0, 0, 0], 'bottom right: black');
+    // Screen sleep: the display process must be gone (screen released) when suspend returns.
+    await p.stop();
+    const proc = p.display.proc;
+    assert.equal(await p.suspendDisplay(), true);
+    assert.ok(proc.exitCode !== null || proc.signalCode !== null, 'display mpv exited before suspend returned');
+    assert.equal(await p.resumeDisplay(), true);
+    assert.ok(p.display && p.display.ready, 'display back after wake');
   } finally {
     await p.close();
   }

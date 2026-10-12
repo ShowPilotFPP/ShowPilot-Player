@@ -74,3 +74,14 @@ test('own commands, and nothing happens while turned off', async () => {
   off.advance(60 * 60000); await off.ss.tick();
   assert.equal(off.ss.asleep, false);
 });
+
+test('a remote ignores its own schedule (songs come from the master)', async () => {
+  const start = new Date(Date.parse('2026-12-01T17:30:00Z')), end = new Date(Date.parse('2026-12-01T23:00:00Z'));
+  const r = rig({}, { schedule: { runs: { a: { start, end } }, entries: [{ id: 'a', type: 'playlist' }] } });
+  assert.equal(r.ss.keepAwakeReason(), 'show starting', 'a player keeps the screen on through its show window');
+  r.scheduler.enabled = false; // remote mode
+  assert.equal(r.ss.keepAwakeReason(), '');
+  await r.ss.tick();
+  r.advance(5 * 60000 + 1000); await r.ss.tick();
+  assert.equal(r.ss.asleep, true, 'sleeps after the idle time even inside the old show window');
+});
