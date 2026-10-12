@@ -109,7 +109,7 @@
   };
   const NAV = [
     { label: 'Dashboard', icon: 'dashboard', page: 'dashboard' },
-    { label: 'Show', icon: 'show', items: [['playlists', '', 'Playlists'], ['schedule', '', 'Schedule'], ['commands', '', 'Commands']] },
+    { label: 'Show', icon: 'show', items: [['playlists', '', 'Playlists'], ['music', '', 'Background music'], ['schedule', '', 'Schedule'], ['commands', '', 'Commands']] },
     { label: 'Files', icon: 'files', page: 'files' },
     { label: 'Lights', icon: 'lights', items: [['outputs', 'controllers', 'Controllers'], ['outputs', 'timing', 'Timing'], ['outputs', 'test', 'Test patterns'], ['display', '', 'Video & Matrix']] },
     { label: 'Connections', icon: 'connect', items: [['showpilot', '', 'ShowPilot'], ['multisync', '', 'MultiSync'], ['plugins', '', 'Plugins']] },
@@ -232,6 +232,7 @@
       $('#topStatus').innerHTML = [
         live ? `<span class="spn-chip ok"><i class="dot live"></i><span>${esc(p.sequence || p.media)}</span></span>` : '<span class="spn-chip"><i class="dot"></i><span>Idle</span></span>',
         STATUS.mode === 'remote' ? '<span class="spn-chip warn"><span>Remote mode</span></span>' : '',
+        STATUS.music && STATUS.music.state === 'playing' ? `<a class="spn-chip ok" href="#music" title="Background music" style="text-decoration:none"><i class="fas fa-music"></i><span>${esc(STATUS.music.title || 'Background music')}</span></a>` : '',
         sp.enabled && STATUS.mode !== 'remote' ? `<span class="spn-chip ${sp.connected ? 'ok' : 'bad'}"><span>ShowPilot ${sp.connected ? 'connected' : 'offline'}</span></span>` : '',
       ].join('');
       let banner = $('#problems');
@@ -1781,6 +1782,107 @@
       } catch (e) { $('#upd').innerHTML = `<p class="err">${esc(e.message)}</p><button class="btn" id="chk">Try again</button>`; $('#chk').onclick = () => upd(true); }
     };
     upd(false);
+  };
+
+  // ---------------------------------------------------------------- background music
+  // Pre-show music (lib/bgmusic.js): the FPP Background Music plugin's features.
+  PAGES.music = async (el) => {
+    await loadLib();
+    await loadConfig();
+    if (CONFIG.mode === 'remote') {
+      el.innerHTML = `<div class="card"><h3>Background music is off in Remote mode</h3>
+        <p class="muted">The MultiSync master plays the pre-show music and starts the main show. Your settings here are kept for Player mode.</p>
+        <div class="row"><a class="btn" href="#multisync">MultiSync settings</a></div></div>`;
+      return;
+    }
+    let { settings: m, status: st } = await api('GET', P('/music'));
+    const plOpts = (sel) => `<option value="">—</option>${LIB.playlists.map((n) => `<option ${n === sel ? 'selected' : ''}>${esc(n)}</option>`).join('')}`;
+    const STATE = { off: ['', 'Off'], playing: ['ok', 'Playing'], yielded: ['warn', 'Paused for show audio'], transition: ['warn', 'Starting the main show…'], show: ['ok', 'Main show running'] };
+    el.innerHTML = `
+      <div class="grid g2">
+        <div class="card"><div class="row"><h3 style="margin:0">Now</h3><span class="spacer"></span><span id="bgState"></span></div>
+          <h2 class="spn-title" id="bgTitle" style="margin:14px 0 4px"></h2><div class="muted" id="bgSub"></div>
+          <div class="spn-track" style="margin-top:12px"><div class="spn-fill" id="bgFill"></div></div>
+          <div class="spn-times"><span id="bgPos">0:00</span><span id="bgDur"></span></div>
+          <div class="row" style="margin-top:12px">
+            <button class="btn primary" id="bgStart"><i class="fas fa-play"></i> Start music</button>
+            <button class="btn" id="bgNext"><i class="fas fa-forward-step"></i> Next</button>
+            <button class="btn" id="bgStop"><i class="fas fa-stop"></i> Stop</button>
+          </div>
+          <p class="err" id="bgErr" hidden></p>
+          <hr>
+          <div class="row"><button class="btn primary" id="bgShow"><i class="fas fa-wand-magic-sparkles"></i> Start Main Show</button><span class="dim" id="bgShowName"></span></div>
+          <p class="dim">Fades the music and lights out together, stops the pre-show, holds a blackout, then starts the show playlist.</p></div>
+        <div class="card"><h3>Music</h3>
+          <div class="seg" id="bgSrc">${[['playlist', 'My music (a playlist)'], ['stream', 'Internet radio']].map(([v, l]) => `<button type="button" data-v="${v}" class="${m.source === v ? 'on' : ''}">${l}</button>`).join('')}</div>
+          <div class="stack" style="margin-top:12px">
+            <label data-src="playlist">Music playlist <select id="bgPl">${plOpts(m.playlist)}</select>
+              <span class="dim">Its audio items play in order (or shuffled). Make one under Show → Playlists with just your pre-show songs.</span></label>
+            <label data-src="stream">Stream URL <input id="bgUrl" value="${esc(m.streamUrl)}" placeholder="https://… (an MP3/AAC/Icecast/Shoutcast stream)"></label>
+            <label class="inline" data-src="playlist"><input type="checkbox" id="bgShuf" ${m.shuffle ? 'checked' : ''}> Shuffle (new order every time round)</label>
+            <label>Volume <span class="row" style="gap:10px"><input type="range" id="bgVol" min="0" max="100" value="${m.volume}" style="flex:1"><b id="bgVolV">${m.volume}%</b></span>
+              <span class="dim">Relative to show songs, which always play at full level.</span></label>
+            <label>Fade time (seconds) <input type="number" id="bgFade" min="0" max="60" step="0.5" value="${m.fadeSec}"></label>
+          </div>
+          <div class="row" style="margin-top:12px"><button class="btn primary" id="bgSave">Save</button></div></div>
+        <div class="card"><h3>Main show</h3>
+          <div class="stack">
+            <label>Show playlist <select id="bgShowPl">${plOpts(m.showPlaylist)}</select></label>
+            <label>Blackout before the show (seconds) <input type="number" id="bgBlack" min="0" max="60" step="0.5" value="${m.blackoutSec}"></label>
+            <label class="inline"><input type="checkbox" id="bgRet" ${m.returnToPreShow ? 'checked' : ''}> Back to pre-show when the show ends</label>
+            <label>…after (seconds) <input type="number" id="bgDelay" min="0" max="600" value="${m.postShowDelaySec}"></label>
+            <label>Pre-show lights playlist to restart too (optional) <select id="bgPre">${plOpts(m.preShowPlaylist)}</select>
+              <span class="dim">Usually the sequence-only animation the music plays over.</span></label>
+          </div>
+          <div class="row" style="margin-top:12px"><button class="btn primary" id="bgSave2">Save</button></div></div>
+        <div class="card"><h3>Schedule it</h3>
+          <p class="muted">Add command entries under Show → Schedule: <b>Background Music - Start</b> at your pre-show time, <b>Background Music - Start Main Show</b> at show time, and <b>Background Music - Stop</b> at the end. The same commands work from presets, plugins and buttons. Commands with the FPP plugin's names (<i>BackgroundMusic - Start Main Show</i>, …) also work, so schedules brought over from FPP keep running.</p>
+          <p class="dim">Songs with audio in any playlist take the sound card while they play; the music fades out for them and comes back after.</p></div>
+      </div>`;
+    const fmtS = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+    const showSrc = () => $$('[data-src]', el).forEach((n) => { n.hidden = n.dataset.src !== m.source; });
+    showSrc();
+    $$('#bgSrc button', el).forEach((b) => (b.onclick = () => { m.source = b.dataset.v; $$('#bgSrc button', el).forEach((x) => x.classList.toggle('on', x === b)); showSrc(); }));
+    const draw = () => {
+      const [cls, label] = STATE[st.state] || ['', st.state];
+      $('#bgState').innerHTML = `<span class="pill ${cls}">${label}</span>`;
+      const on = st.state === 'playing';
+      $('#bgTitle').textContent = on || st.state === 'yielded' ? (st.title || (st.source === 'stream' ? 'Internet radio' : '…')) : st.state === 'show' ? st.showPlaylist : 'No music';
+      $('#bgTitle').classList.toggle('idle', !on);
+      $('#bgSub').textContent = on ? (st.source === 'stream' ? 'Internet radio' : `Track ${st.track} of ${st.tracks}`) : '';
+      const pct = st.durationSec ? Math.min(100, (st.positionSec / st.durationSec) * 100) : 0;
+      $('#bgFill').style.width = (on && st.source !== 'stream' ? pct : 0) + '%';
+      $('#bgPos').textContent = on ? fmtS(st.positionSec) : '0:00';
+      $('#bgDur').textContent = on && st.durationSec ? fmtS(st.durationSec) : '';
+      $('#bgStart').disabled = on || st.state === 'transition';
+      $('#bgNext').disabled = !on || st.source === 'stream';
+      $('#bgStop').disabled = st.state === 'off' || st.state === 'show';
+      $('#bgShow').disabled = st.state === 'transition';
+      $('#bgShowName').textContent = m.showPlaylist ? `Starts "${m.showPlaylist}"` : 'Pick the show playlist below first';
+      $('#bgErr').hidden = !st.lastError; $('#bgErr').textContent = st.lastError || '';
+    };
+    draw();
+    const refresh = async () => { try { ({ status: st } = await api('GET', P('/music'))); draw(); } catch {} };
+    pageTimer = setInterval(refresh, 1000);
+    const act = (url, msg) => guard(async () => { await api('POST', P(url)); if (msg) toast(msg); await refresh(); });
+    $('#bgStart').onclick = act('/music/start', 'Background music started');
+    $('#bgStop').onclick = act('/music/stop', 'Background music fading out');
+    $('#bgNext').onclick = act('/music/next');
+    $('#bgShow').onclick = guard(async () => {
+      if (!(await ask(`Music and lights fade out over ${m.fadeSec} s, then "${m.showPlaylist}" starts after a ${m.blackoutSec} s blackout.`, { title: 'Start the main show?', ok: 'Start show' }))) return;
+      await api('POST', P('/music/main-show')); await refresh();
+    });
+    $('#bgVol').oninput = () => { $('#bgVolV').textContent = $('#bgVol').value + '%'; };
+    $('#bgVol').onchange = guard(async () => { await api('PUT', P('/music'), { volume: +$('#bgVol').value }); });
+    const save = guard(async () => {
+      ({ settings: m, status: st } = await api('PUT', P('/music'), {
+        source: m.source, playlist: $('#bgPl').value, streamUrl: $('#bgUrl').value, shuffle: $('#bgShuf').checked, volume: +$('#bgVol').value,
+        fadeSec: +$('#bgFade').value, showPlaylist: $('#bgShowPl').value, blackoutSec: +$('#bgBlack').value, returnToPreShow: $('#bgRet').checked,
+        postShowDelaySec: +$('#bgDelay').value, preShowPlaylist: $('#bgPre').value,
+      }));
+      toast('Background music saved'); draw();
+    });
+    $('#bgSave').onclick = save; $('#bgSave2').onclick = save;
   };
 
   // ---------------------------------------------------------------- file sharing

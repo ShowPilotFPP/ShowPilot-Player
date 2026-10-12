@@ -107,3 +107,42 @@ test('a sequence replaced on disk (re-uploaded from xLights) plays its new data,
     rx.close();
   }
 });
+
+test('master dimmer scales what goes out (Start Main Show fade), not the sequence', { skip, timeout: 30000 }, async () => {
+  const dgram = require('dgram');
+  const paths = require('../lib/paths');
+  const { writeFseq } = require('../lib/fseq');
+  const config = require('../lib/config');
+  const { Player } = require('../lib/engine/player');
+  const { DDP_PORT } = require('../lib/outputs');
+  paths.ensureLayout();
+  config.load();
+  const rx = dgram.createSocket('udp4');
+  try { await new Promise((r, j) => { rx.once('error', j); rx.bind(DDP_PORT, '127.0.0.1', r); }); }
+  catch { rx.close(); return; } // port busy on this machine: nothing to check
+  let last = null;
+  rx.on('message', (m) => { last = m; });
+  const cc = 30, frames = [];
+  for (let i = 0; i < 200; i++) frames.push(Buffer.alloc(cc, 200));
+  writeFseq(paths.fileIn('sequences', 'dim.fseq'), { channelCount: cc, frames, stepMs: 25 });
+  config.update({ outputs: [{ type: 'ddp', ip: '127.0.0.1', startChannel: 1, channelCount: cc }], outputPacingMbps: 0 });
+  const p = new Player(config);
+  await p.start();
+  try {
+    await p.play({ sequence: 'dim.fseq' });
+    await wait(300);
+    assert.equal(last[10], 200, 'full level');
+    p.setBrightness(0.5);
+    await wait(300);
+    assert.equal(last[10], 100, 'half level');
+    p.setBrightness(0);
+    await wait(300);
+    assert.equal(last[10], 0, 'black');
+    p.setBrightness(1);
+    await wait(300);
+    assert.equal(last[10], 200, 'back to full: the frames themselves were never changed');
+  } finally {
+    await p.close();
+    rx.close();
+  }
+});

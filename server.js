@@ -123,6 +123,12 @@ async function main() {
   if ((config.get().screenSleep || {}).enabled && (config.get().screenSleep.method || 'hdmi') === 'hdmi') screen._hdmi(true).catch(() => {});
   screen.start();
 
+  const { BackgroundMusic } = require('./lib/bgmusic');
+  const bgm = new BackgroundMusic({ config, player, show, commands, resolveMedia: require('./lib/engine/player').resolveMedia });
+  bgm.on('log', (m) => log.info('music', m));
+  ctx.bgm = bgm;
+  bgm.start();
+
   const { FileShare } = require('./lib/fileshare');
   const fileShare = new FileShare({ config, log: (m) => log.info('fileshare', m) });
   ctx.fileShare = fileShare;
@@ -195,6 +201,7 @@ async function main() {
     try { await presetRunner.trigger('FPPD_STOPPED'); } catch {}
     scheduler.stop();
     showpilot.close();
+    try { await bgm.close(); } catch {}
     multisync.close();
     try { await show.stopNow(); } catch {}
     try { await player.close(); } catch {}

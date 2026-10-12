@@ -93,6 +93,7 @@ module.exports = function playerRoutes(ctx) {
       pluginRestart: plugins.restartFlag() > 0,
       rebootNeeded: plugins.rebootFlag() > 0,
       screen: ctx.screen ? ctx.screen.status() : null,
+      music: ctx.bgm ? ctx.bgm.status() : null,
       problems: [
         ...require('../lib/health').outputProblems(config.get()),
         ...require('../lib/health').missing().map((d) => `${d.bin} is not installed (${d.why}). Install it under Settings → Updates → System software.`),
@@ -128,6 +129,37 @@ module.exports = function playerRoutes(ctx) {
   }));
   r.post('/screen/sleep', wrap(async () => { if (!ctx.screen) throw new Error('no screen'); const r = await ctx.screen.sleep('manual'); return { ok: true, result: r, status: ctx.screen.status() }; }));
   r.post('/screen/wake', wrap(async () => { if (!ctx.screen) throw new Error('no screen'); const r = await ctx.screen.wake('manual'); return { ok: true, result: r, status: ctx.screen.status() }; }));
+  // ------------------------------------------------------------ background music
+  const bgm = () => { if (!ctx.bgm) throw new Error('background music is not available'); return ctx.bgm; };
+  r.get('/music', wrap(() => ({ settings: bgm().cfg, status: bgm().status() })));
+  r.put('/music', wrap((req) => {
+    const b = req.body || {};
+    const D = require('../lib/bgmusic').DEFAULTS;
+    const patch = {};
+    for (const k of Object.keys(D)) {
+      if (b[k] === undefined) continue;
+      if (typeof D[k] === 'boolean') patch[k] = !!b[k];
+      else if (typeof D[k] === 'number') { const n = Number(b[k]); if (Number.isFinite(n)) patch[k] = k === 'volume' ? Math.max(0, Math.min(100, n)) : Math.max(0, Math.min(600, n)); }
+      else patch[k] = String(b[k]).trim();
+    }
+    if (patch.source && !['playlist', 'stream'].includes(patch.source)) delete patch.source;
+    config.update({ backgroundMusic: patch });
+    return { settings: bgm().cfg, status: bgm().status() };
+  }));
+  r.post('/music/start', wrap(() => bgm().play()));
+  r.post('/music/stop', wrap(() => bgm().stopMusic()));
+  r.post('/music/next', wrap(() => bgm().next()));
+  r.post('/music/main-show', wrap((req) => {
+    // Answer once the transition has begun; it takes fade + blackout seconds.
+    const b = bgm();
+    const p = b.startMainShow((req.body || {}).playlist);
+    p.catch(() => {});
+    return new Promise((resolve, reject) => {
+      p.then(() => resolve(b.status()), reject);
+      setTimeout(() => resolve(b.status()), 300);
+    });
+  }));
+
   // ------------------------------------------------------------ file sharing (SMB)
   const share = () => { if (!ctx.fileShare) throw new Error('file sharing is not available'); return ctx.fileShare; };
   r.get('/fileshare', wrap(() => share().status()));
