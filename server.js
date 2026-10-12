@@ -122,7 +122,18 @@ async function main() {
   // A screen left switched off by a previous run comes back on at start.
   if ((config.get().screenSleep || {}).enabled && (config.get().screenSleep.method || 'hdmi') === 'hdmi') screen._hdmi(true).catch(() => {});
   screen.start();
-  config.on('change', (c) => { scheduler.enabled = c.mode !== 'remote'; });
+
+  const { FileShare } = require('./lib/fileshare');
+  const fileShare = new FileShare({ config, log: (m) => log.info('fileshare', m) });
+  ctx.fileShare = fileShare;
+  fileShare.start();
+  // Remote mode: the master runs the show. Schedule off, no local shows, and
+  // a show that was running here stops when the player becomes a remote.
+  show.locked = () => (config.get().mode === 'remote' ? 'This player is in Remote mode and plays what its MultiSync master plays. Switch to Player mode on the MultiSync page to run shows here.' : null);
+  config.on('change', (c) => {
+    scheduler.enabled = c.mode !== 'remote';
+    if (c.mode === 'remote' && show.isRunning()) show.stopNow().catch(() => {});
+  });
 
   // ------------------------------------------------------------ HTTP
   const app = express();

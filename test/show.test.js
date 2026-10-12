@@ -145,3 +145,16 @@ test('a repeating playlist where nothing can play stops with the reason instead 
   assert.deepEqual(ran, ['IFTTT Webhook Trigger']);
   assert.equal(s2.isRunning(), false);
 });
+
+test('remote mode: nothing local can start or insert a show', async () => {
+  const p = new FakePlayer(); const s = new Show(p);
+  s.locked = () => 'This player is in Remote mode';
+  for (const run of [() => s.start('Main'), () => s.insertImmediate('Remote', 1, 1), () => s.insertAfterCurrent('Remote', 1, 1)]) {
+    await assert.rejects(run(), (e) => e.status === 409 && /Remote mode/.test(e.message));
+  }
+  assert.equal(p.played.length, 0);
+  s.locked = () => null; // back to player mode
+  await s.start('Main');
+  assert.equal(p.played.length, 1);
+  await s.stopNow();
+});

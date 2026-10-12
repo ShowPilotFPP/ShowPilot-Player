@@ -94,7 +94,7 @@ module.exports = function playerRoutes(ctx) {
       rebootNeeded: plugins.rebootFlag() > 0,
       screen: ctx.screen ? ctx.screen.status() : null,
       problems: [
-        ...(config.get().outputs || []).some((o) => o.enabled !== false) ? [] : ['No controller outputs are set up, so no lights are sent. Add them under Lights → Controllers, or in xLights FPP Connect set this player\'s "UDP Out" to "All".'],
+        ...require('../lib/health').outputProblems(config.get()),
         ...require('../lib/health').missing().map((d) => `${d.bin} is not installed (${d.why}). Install it under Settings → Updates → System software.`),
         ...(player.problems || []),
       ],
@@ -109,6 +109,7 @@ module.exports = function playerRoutes(ctx) {
   // ------------------------------------------------------------ transport
   r.post('/play', wrap(async (req) => {
     const b = req.body || {};
+    show._guard(); // remote mode: say so before looking anything up
     // Report what actually happened: a playlist whose items can't play stops
     // right away, and the reason goes back to the page instead of a false "Playing".
     const outcome = () => {
@@ -127,11 +128,25 @@ module.exports = function playerRoutes(ctx) {
   }));
   r.post('/screen/sleep', wrap(async () => { if (!ctx.screen) throw new Error('no screen'); const r = await ctx.screen.sleep('manual'); return { ok: true, result: r, status: ctx.screen.status() }; }));
   r.post('/screen/wake', wrap(async () => { if (!ctx.screen) throw new Error('no screen'); const r = await ctx.screen.wake('manual'); return { ok: true, result: r, status: ctx.screen.status() }; }));
+  // ------------------------------------------------------------ file sharing (SMB)
+  const share = () => { if (!ctx.fileShare) throw new Error('file sharing is not available'); return ctx.fileShare; };
+  r.get('/fileshare', wrap(() => share().status()));
+  r.put('/fileshare', wrap(async (req) => {
+    const b = req.body || {};
+    const patch = {};
+    if (b.enabled !== undefined) patch.enabled = !!b.enabled;
+    if (b.name !== undefined) patch.name = require('../lib/fileshare').cleanName(b.name);
+    if (b.requirePassword === false) patch.requirePassword = false;
+    config.update({ fileShare: patch });
+    return share().apply();
+  }));
+  r.post('/fileshare/password', wrap((req) => share().setPassword((req.body || {}).password)));
   r.post('/stop', wrap(async (req) => { if (req.body && req.body.graceful) show.stopGracefully(); else await show.stopNow(); return { ok: true }; }));
   r.post('/next', wrap(async () => { await show.next(); return { ok: true }; }));
   r.post('/prev', wrap(async () => { await show.prev(); return { ok: true }; }));
   r.post('/pause', wrap(async () => ({ ok: await show.togglePause() })));
   r.post('/insert', wrap(async (req) => {
+    show._guard();
     const { playlist, item, immediate } = req.body || {};
     const i = parseInt(item, 10) || 0;
     if (immediate) await show.insertImmediate(playlist, i, i); else await show.insertAfterCurrent(playlist, i, i);

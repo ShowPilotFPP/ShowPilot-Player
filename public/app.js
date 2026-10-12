@@ -64,6 +64,10 @@
   let LIB = null;
   let STATUS = null;
   const loadConfig = async () => (CONFIG = await api('GET', P('/config')));
+  // MultiSync remote: the master runs the show; local show controls are off.
+  const isRemote = () => ((STATUS && STATUS.mode) || (CONFIG && CONFIG.mode)) === 'remote';
+  const REMOTE_TIP = 'Remote mode: this player plays what its MultiSync master plays';
+  const lockForRemote = (btns) => { if (!isRemote()) return; btns.forEach((b) => { if (b) { b.disabled = true; b.title = REMOTE_TIP; } }); };
   const loadLib = async () => (LIB = await api('GET', P('/library')));
   const saveConfig = async (patch, msg = 'Saved') => { CONFIG = await api('PUT', P('/config'), patch); toast(msg); return CONFIG; };
 
@@ -109,7 +113,7 @@
     { label: 'Files', icon: 'files', page: 'files' },
     { label: 'Lights', icon: 'lights', items: [['outputs', 'controllers', 'Controllers'], ['outputs', 'timing', 'Timing'], ['outputs', 'test', 'Test patterns'], ['display', '', 'Video & Matrix']] },
     { label: 'Connections', icon: 'connect', items: [['showpilot', '', 'ShowPilot'], ['multisync', '', 'MultiSync'], ['plugins', '', 'Plugins']] },
-    { label: 'Settings', icon: 'settings', items: [['system', 'general', 'General'], ['system', 'security', 'Password'], ['system', 'updates', 'Updates'], ['system', 'restore', 'FPP backup'], ['system', 'power', 'Power'], ['system', 'log', 'Log']] },
+    { label: 'Settings', icon: 'settings', items: [['system', 'general', 'General'], ['system', 'security', 'Password'], ['system', 'share', 'File sharing'], ['system', 'updates', 'Updates'], ['system', 'restore', 'FPP backup'], ['system', 'power', 'Power'], ['system', 'log', 'Log']] },
   ];
   const navSvg = (d, w = 20) => `<svg width="${w}" height="${w}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
   const hashOf = (page, sub) => '#' + page + (sub ? '/' + sub : '');
@@ -228,7 +232,7 @@
       $('#topStatus').innerHTML = [
         live ? `<span class="spn-chip ok"><i class="dot live"></i><span>${esc(p.sequence || p.media)}</span></span>` : '<span class="spn-chip"><i class="dot"></i><span>Idle</span></span>',
         STATUS.mode === 'remote' ? '<span class="spn-chip warn"><span>Remote mode</span></span>' : '',
-        sp.enabled ? `<span class="spn-chip ${sp.connected ? 'ok' : 'bad'}"><span>ShowPilot ${sp.connected ? 'connected' : 'offline'}</span></span>` : '',
+        sp.enabled && STATUS.mode !== 'remote' ? `<span class="spn-chip ${sp.connected ? 'ok' : 'bad'}"><span>ShowPilot ${sp.connected ? 'connected' : 'offline'}</span></span>` : '',
       ].join('');
       let banner = $('#problems');
       if (!banner) { banner = document.createElement('div'); banner.id = 'problems'; $('.main').insertBefore(banner, $('#page')); }
@@ -253,10 +257,17 @@
   // ---------------------------------------------------------------- dashboard
   PAGES.dashboard = async (el) => {
     await loadLib();
+    if (!STATUS) await loadConfig();
+    const remote = isRemote();
     el.innerHTML = `
       <div class="dash-row">
         <section class="card spn-onair" id="nowCard" aria-live="polite"></section>
-        <section class="card dash-play">
+        ${remote ? `<section class="card dash-play">
+          <h2>Remote mode</h2>
+          <p class="muted">This player follows its MultiSync master and plays whatever the master plays, so shows, playlists and the schedule are started on the master. ShowPilot is handled by the master too.</p>
+          <p class="muted" id="dashMaster"></p>
+          <div class="row"><a class="btn" href="#multisync">MultiSync settings</a></div>
+        </section>` : `<section class="card dash-play">
           <h2>Play</h2>
           <div class="row">
             <select id="dashPl" style="max-width:100%">${LIB.playlists.length || LIB.sequences.length ? '' : '<option value="">Nothing uploaded yet</option>'}
@@ -267,11 +278,11 @@
             <button class="btn primary" id="dashStart">Start</button>
           </div>
           <div class="dash-next"><p class="muted" id="dashNext"></p><p class="muted" id="dashSched"></p></div>
-        </section>
+        </section>`}
       </div>
       <div class="card"><h3>Timing</h3><div class="stats" id="timing"></div>
         <p class="dim" style="margin:10px 0 0">Lights follow the audio clock. "Late" is how far after its due time a frame left; frames are never queued, a late wake-up skips straight to the right frame.</p></div>`;
-    $('#dashStart').onclick = guard(async () => {
+    if ($('#dashStart')) $('#dashStart').onclick = guard(async () => {
       const v = $('#dashPl').value; if (!v) return;
       const repeat = $('#dashRepeat').checked;
       let r;
@@ -327,6 +338,10 @@
         finally { b.disabled = false; pollStatus(); }
       }));
     }
+    const tr = $('.transport', card);
+    if (tr) tr.hidden = STATUS.mode === 'remote';
+    const dm = $('#dashMaster');
+    if (dm) dm.textContent = STATUS.multisync.lastMaster ? `Following ${STATUS.multisync.lastMaster}.` : 'No master heard yet.';
     const tally = $('#nTally');
     tally.className = `spn-tally ${live ? '' : pl.paused ? 'paused' : 'off'}`;
     $('b', tally).textContent = live ? 'ON AIR' : pl.paused ? 'PAUSED' : 'OFF AIR';
@@ -555,6 +570,7 @@
     let drag = null;
     const wire = () => {
       const box = $('#plEditor');
+      lockForRemote([$('#plPlay')]);
       $('#plPlay').onclick = guard(async () => { const r = await api('POST', P('/play'), { playlist: pl.name, repeat: !!pl.repeat }); toast(r && r.finished ? `${pl.name} ran and finished` : `Playing ${pl.name}`); });
       $('#plMore').onclick = (ev) => { ev.stopPropagation(); $('#plMenu').hidden = !$('#plMenu').hidden; };
       document.addEventListener('click', () => { if ($('#plMenu')) $('#plMenu').hidden = true; }, { once: true });
@@ -785,6 +801,7 @@
         if (PREVIEW.name === n) stopPreview();
         await loadLib(); render();
       })));
+      lockForRemote($$('[data-play-seq]', el));
       $$('[data-play-seq]', el).forEach((b) => (b.onclick = guard(async () => {
         await api('POST', P('/play'), { sequence: b.dataset.playSeq, media: b.dataset.media || undefined });
         toast(`Playing ${b.dataset.playSeq}`);
@@ -1449,6 +1466,13 @@
   // ---------------------------------------------------------------- showpilot
   PAGES.showpilot = async (el) => {
     await loadLib();
+    await loadConfig();
+    if (CONFIG.mode === 'remote') {
+      el.innerHTML = `<div class="card"><h3>ShowPilot is off in Remote mode</h3>
+        <p class="muted">This player follows a MultiSync master, and the master is the one that talks to ShowPilot (now playing, requests and votes, phone audio). Your settings here are kept and come back if you switch this player to Player mode.</p>
+        <div class="row"><a class="btn" href="#multisync">MultiSync settings</a></div></div>`;
+      return;
+    }
     const s = await api('GET', P('/showpilot'));
     const st = s.status;
     el.innerHTML = `
@@ -1689,6 +1713,7 @@
         <div class="card" data-sub="security"><h3>Admin password</h3><p class="muted">${auth.required ? 'The admin pages need a password.' : 'No password set: anyone on this network can use the admin pages.'}</p>
           <div class="row"><input type="password" id="pw" placeholder="New password (6+ characters)" autocomplete="new-password"><button class="btn" id="setPw">Set</button>${auth.required ? '<button class="btn danger" id="clrPw">Remove</button><button class="btn" id="logout">Sign out</button>' : ''}</div>
           <p class="dim">xLights and FPP plugins use the FPP-compatible API, which stays open like on FPP.</p></div>
+        <div class="card" data-sub="share" id="shareCard"><h3>File sharing</h3><div id="shareBody" class="muted">Checking…</div></div>
         <div class="card" data-sub="updates"><h3>Player software</h3><div id="upd" class="muted">Checking…</div></div>
         <div class="card" data-sub="updates"><h3>System software</h3><div id="sysUpd" class="muted">Raspberry Pi OS packages, mpv, ffmpeg, PHP and Node.js. Updated in place, no reflashing.</div>
           <div class="row" style="margin-top:10px"><button class="btn" id="sysChk">Check</button><button class="btn primary" id="sysRun">Update system software</button></div>
@@ -1741,6 +1766,7 @@
     });
     sysPoll();
     wireRestore();
+    wireShare();
     const loadLog = guard(async () => { const r = await api('GET', P('/logs?n=400')); $('#log').textContent = r.lines.join('\n'); $('#log').scrollTop = 1e9; });
     $('#refLog').onclick = loadLog;
     loadLog();
@@ -1756,6 +1782,40 @@
     };
     upd(false);
   };
+
+  // ---------------------------------------------------------------- file sharing
+  // SMB share of the media folder (lib/fileshare.js), like FPP's.
+  async function wireShare() {
+    const box = $('#shareBody');
+    if (!box) return;
+    let st;
+    try { st = await api('GET', P('/fileshare')); } catch (e) { box.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+    const pill = !st.installed ? '<span class="pill warn">Samba not installed</span>' : st.lastError ? `<span class="pill bad" title="${esc(st.lastError)}">Not running</span>`
+      : st.enabled ? '<span class="pill ok">Sharing</span>' : '<span class="pill">Off</span>';
+    box.innerHTML = `
+      <p class="muted">Opens this player's media folder (sequences, music, videos, scripts, plugins…) as a network drive, like FPP's file share. Copy files in and out from your computer; the player picks them up right away.</p>
+      <p>${pill}</p>
+      ${!st.installed ? '<p class="muted">Install it once under <b>Settings → Updates → System software</b> (Update system software). Sharing starts by itself when it is installed.</p>' : ''}
+      ${st.lastError ? `<p class="err">${esc(st.lastError)}</p>` : ''}
+      <label class="inline"><input type="checkbox" id="shOn" ${st.enabled ? 'checked' : ''}> Share the media folder on the network</label>
+      <div class="fields" style="margin-top:12px">
+        <label>Share name <input id="shName" value="${esc(st.name)}" maxlength="32"></label>
+      </div>
+      ${st.enabled && st.installed ? `<div class="stack" style="margin-top:12px">
+        <div><span class="dim">Windows (File Explorer address bar)</span><br><code class="mono">${esc(st.windows)}</code></div>
+        <div><span class="dim">Mac (Finder → Go → Connect to Server, or it shows in the sidebar)</span><br><code class="mono">${esc(st.mac)}</code></div>
+      </div>` : ''}
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="shSave">Save</button></div>
+      <h3 style="margin-top:18px">Password</h3>
+      <p class="muted">${st.requirePassword ? 'The share asks for a user name and password. User name: <b>fpp</b>.' : 'No password: anyone on your network can open and change these files, like on FPP. Windows 11 usually refuses shares without a password; set one to connect from Windows 11.'}</p>
+      <div class="row"><input type="password" id="shPw" placeholder="${st.requirePassword ? 'New password' : 'Password (4+ characters)'}" autocomplete="new-password"><button class="btn" id="shSetPw" ${st.installed ? '' : 'disabled'}>${st.requirePassword ? 'Change' : 'Set password'}</button>${st.requirePassword ? '<button class="btn danger" id="shClrPw">Remove password</button>' : ''}</div>`;
+    $('#shSave').onclick = guard(async () => { await api('PUT', P('/fileshare'), { enabled: $('#shOn').checked, name: $('#shName').value }); toast('File sharing saved'); wireShare(); });
+    $('#shSetPw').onclick = guard(async () => { await api('POST', P('/fileshare/password'), { password: $('#shPw').value }); toast('Share password set (user fpp)'); wireShare(); });
+    if ($('#shClrPw')) $('#shClrPw').onclick = guard(async () => {
+      if (!(await ask('Anyone on your network will be able to open and change the media files.', { title: 'Remove the share password?', ok: 'Remove', danger: true }))) return;
+      await api('POST', P('/fileshare/password'), { password: '' }); toast('Share password removed'); wireShare();
+    });
+  }
 
   // ---------------------------------------------------------------- boot
   // The theme is saved with the player's settings; follow it on every device.

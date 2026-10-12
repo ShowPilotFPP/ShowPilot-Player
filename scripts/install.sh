@@ -18,7 +18,7 @@ fi
 echo "== Packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
-apt-get install -y -q --no-install-recommends mpv ffmpeg php-cgi php-cli php-curl php-xml git curl ca-certificates xz-utils avahi-daemon alsa-utils jq kbd
+apt-get install -y -q --no-install-recommends mpv ffmpeg php-cgi php-cli php-curl php-xml git curl ca-certificates xz-utils avahi-daemon alsa-utils jq kbd samba
 
 echo "== Node.js ${NODE_MAJOR}"
 # Needs Node 22.15+ (built-in zstd for compressed .fseq files).

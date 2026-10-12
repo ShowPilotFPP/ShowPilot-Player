@@ -12,3 +12,4 @@ avahi-daemon
 alsa-utils
 jq
 kbd
+samba
