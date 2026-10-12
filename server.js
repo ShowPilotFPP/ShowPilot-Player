@@ -128,6 +128,7 @@ async function main() {
   bgm.on('log', (m) => log.info('music', m));
   ctx.bgm = bgm;
   bgm.start();
+  scheduler.beforeShow = (entry) => bgm.beforeScheduledShow(entry);
 
   const { FileShare } = require('./lib/fileshare');
   const fileShare = new FileShare({ config, log: (m) => log.info('fileshare', m) });

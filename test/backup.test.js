@@ -198,6 +198,21 @@ test('review fixes: one-sided yearly ranges, manual starts win, edited windows k
   assert.deepStrictEqual(show.stops, [], 'manual start of the same playlist wins');
 });
 
+test('scheduler: beforeShow (background music fade) runs before a scheduled show starts, once per window', async () => {
+  const cmds = new Commands();
+  const show = fakeShow();
+  const order = [];
+  show.start = async (what) => { order.push('start ' + what); show.frames = [{ name: what }]; return true; };
+  const sch = new scheduler.Scheduler({ show, commands: cmds, config });
+  sch.beforeShow = async (entry) => { order.push('before ' + entry.playlist); await new Promise((r) => setTimeout(r, 30)); };
+  scheduler.save([{ id: 'bs1', type: 'playlist', playlist: 'Main', repeat: true, startTime: '19:00', endTime: '22:00' }]);
+  const t = (h, m) => new Date(2026, 10, 6, h, m, 1);
+  await sch.tick(t(19, 0));
+  await sch.tick(t(19, 1));
+  assert.deepStrictEqual(order, ['before Main', 'start Main']);
+  scheduler.save([]);
+});
+
 test('review fixes: malformed backup fields do not block the rest', () => {
   const b = JSON.parse(JSON.stringify(BACKUP));
   b.backup_taken = 1e20;

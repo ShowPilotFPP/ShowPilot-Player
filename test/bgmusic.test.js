@@ -114,3 +114,27 @@ test('remote mode and missing settings are refused with a reason', { skip, timeo
     await assert.rejects(bgm.startMainShow(), (e) => e.status === 409);
   } finally { await bgm.close(); }
 });
+
+test('a scheduled show starting while music plays fades into it, and the music stays off', { skip, timeout: 30000 }, async () => {
+  const { bgm, player, show } = rig();
+  const { Scheduler } = require('../lib/scheduler');
+  try {
+    await show.start('Pre-show lights');
+    await bgm.play();
+    assert.ok(await until(() => bgm.pos > 0.2));
+    // The scheduler's hook, as server.js wires it, then its own show start.
+    const t0 = Date.now();
+    assert.equal(await bgm.beforeScheduledShow({ type: 'playlist', playlist: 'Main Show' }), true);
+    assert.ok(Date.now() - t0 >= 450, 'fade + blackout before the show');
+    assert.equal(bgm.state, 'off');
+    assert.equal(bgm.mpv, null);
+    assert.equal(show.running, null, 'pre-show stopped for the blackout');
+    assert.ok(player.levels.includes(0) && player.brightness === 1);
+    // Music not playing (or the option off): the hook does nothing.
+    assert.equal(await bgm.beforeScheduledShow({ type: 'playlist', playlist: 'Main Show' }), false);
+    show.emit('playlist', { Action: 'stop', name: 'Main Show' });
+    await wait(500);
+    assert.equal(bgm.state, 'off', 'no return to pre-show after a scheduled show');
+    assert.equal(typeof Scheduler.prototype.tick, 'function');
+  } finally { await bgm.close(); }
+});

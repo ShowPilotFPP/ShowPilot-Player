@@ -1829,14 +1829,16 @@
           <div class="stack">
             <label>Show playlist <select id="bgShowPl">${plOpts(m.showPlaylist)}</select></label>
             <label>Blackout before the show (seconds) <input type="number" id="bgBlack" min="0" max="60" step="0.5" value="${m.blackoutSec}"></label>
-            <label class="inline"><input type="checkbox" id="bgRet" ${m.returnToPreShow ? 'checked' : ''}> Back to pre-show when the show ends</label>
+            <label class="inline"><input type="checkbox" id="bgSched" ${m.fadeIntoScheduledShows ? 'checked' : ''}> Scheduled shows fade in the same way: when a show starts from the schedule while music plays, music and lights fade out, blackout, then the show (the music stays off after)</label>
+            <label class="inline"><input type="checkbox" id="bgRet" ${m.returnToPreShow ? 'checked' : ''}> After Start Main Show, back to pre-show when the show ends</label>
             <label>…after (seconds) <input type="number" id="bgDelay" min="0" max="600" value="${m.postShowDelaySec}"></label>
             <label>Pre-show lights playlist to restart too (optional) <select id="bgPre">${plOpts(m.preShowPlaylist)}</select>
               <span class="dim">Usually the sequence-only animation the music plays over.</span></label>
           </div>
           <div class="row" style="margin-top:12px"><button class="btn primary" id="bgSave2">Save</button></div></div>
         <div class="card"><h3>Schedule it</h3>
-          <p class="muted">Add command entries under Show → Schedule: <b>Background Music - Start</b> at your pre-show time, <b>Background Music - Start Main Show</b> at show time, and <b>Background Music - Stop</b> at the end. The same commands work from presets, plugins and buttons. Commands with the FPP plugin's names (<i>BackgroundMusic - Start Main Show</i>, …) also work, so schedules brought over from FPP keep running.</p>
+          <p class="muted">Simplest: under Show → Schedule, add a command entry <b>Background Music - Start</b> at your pre-show time, and schedule your show playlist as usual. When the show's time comes, the music and lights fade out, a blackout, then the show starts and the music stays off.</p>
+          <p class="muted">Or use <b>Background Music - Start Main Show</b> at show time to also come back to pre-show music after the show, and <b>Background Music - Stop</b> to end it. The same commands work from presets, plugins and buttons. Commands with the FPP plugin's names (<i>BackgroundMusic - Start Main Show</i>, …) also work, so schedules brought over from FPP keep running.</p>
           <p class="dim">Songs with audio in any playlist take the sound card while they play; the music fades out for them and comes back after.</p></div>
       </div>`;
     const fmtS = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
@@ -1878,7 +1880,7 @@
       ({ settings: m, status: st } = await api('PUT', P('/music'), {
         source: m.source, playlist: $('#bgPl').value, streamUrl: $('#bgUrl').value, shuffle: $('#bgShuf').checked, volume: +$('#bgVol').value,
         fadeSec: +$('#bgFade').value, showPlaylist: $('#bgShowPl').value, blackoutSec: +$('#bgBlack').value, returnToPreShow: $('#bgRet').checked,
-        postShowDelaySec: +$('#bgDelay').value, preShowPlaylist: $('#bgPre').value,
+        postShowDelaySec: +$('#bgDelay').value, preShowPlaylist: $('#bgPre').value, fadeIntoScheduledShows: $('#bgSched').checked,
       }));
       toast('Background music saved'); draw();
     });
