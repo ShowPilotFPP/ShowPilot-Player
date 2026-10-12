@@ -7,7 +7,7 @@ const assert = require('node:assert');
 const { EventEmitter } = require('events');
 const { ScreenSleep } = require('../lib/screen-sleep');
 
-function rig(cfg, { schedule = {} } = {}) {
+function rig(cfg, { schedule = {}, hp = null } = {}) {
   const fb = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'spp-fb-')), 'blank');
   fs.writeFileSync(fb, '0');
   let now = Date.parse('2026-12-01T18:00:00Z');
@@ -20,7 +20,7 @@ function rig(cfg, { schedule = {} } = {}) {
   const ran = [];
   const ss = new ScreenSleep({
     config: { get: () => ({ screenSleep: { enabled: true, idleMinutes: 5, method: 'hdmi', keepAwakeDuringShows: true, ...cfg } }) },
-    player, scheduler, now: () => now, fbPath: fb, shell: async (c) => { ran.push(c); return { ok: true, out: '' }; },
+    player, scheduler, now: () => now, fbPath: fb, hotplug: hp || { procCmdline: '/nonexistent' }, shell: async (c) => { ran.push(c); return { ok: true, out: '' }; },
   });
   return { ss, player, scheduler, fb, ran, advance: (ms) => { now += ms; }, now: () => now };
 }
@@ -84,4 +84,41 @@ test('a remote ignores its own schedule (songs come from the master)', async () 
   await r.ss.tick();
   r.advance(5 * 60000 + 1000); await r.ss.tick();
   assert.equal(r.ss.asleep, true, 'sleeps after the idle time even inside the old show window');
+});
+
+test('hdmi sleep sets vc4.force_hotplug so a monitor going to standby does not switch HDMI back on', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'spp-hp-'));
+  const proc = path.join(d, 'proc-cmdline'), boot = path.join(d, 'cmdline.txt'), param = path.join(d, 'force_hotplug');
+  fs.writeFileSync(proc, 'console=tty1 root=PARTUUID=x rootwait\n');
+  fs.writeFileSync(boot, 'console=tty1 root=PARTUUID=x rootwait consoleblank=0\n');
+  // Kernel without a writable parameter: one reboot needed.
+  const r = rig({}, { hp: { procCmdline: proc, cmdlines: [boot], param: path.join(d, 'missing', 'force_hotplug') } });
+  r.ss.ensureHotplug();
+  assert.equal(fs.readFileSync(boot, 'utf8'), 'console=tty1 root=PARTUUID=x rootwait consoleblank=0 vc4.force_hotplug=3\n', 'added to the one cmdline line');
+  assert.equal(r.ss.status().needsReboot, true);
+  r.ss.ensureHotplug();
+  assert.equal((fs.readFileSync(boot, 'utf8').match(/force_hotplug/g) || []).length, 1, 'added once');
+  // Writable parameter: applied live, no reboot.
+  fs.writeFileSync(param, '0');
+  const live = rig({}, { hp: { procCmdline: proc, cmdlines: [boot], param } });
+  live.ss.ensureHotplug();
+  assert.equal(fs.readFileSync(param, 'utf8'), '3');
+  assert.equal(live.ss.status().needsReboot, false);
+  // Already booted with it: nothing to do. Command method: leaves boot alone.
+  fs.writeFileSync(proc, 'console=tty1 vc4.force_hotplug=3\n');
+  const done = rig({}, { hp: { procCmdline: proc, cmdlines: [boot], param: path.join(d, 'missing', 'x') } });
+  done.ss.ensureHotplug();
+  assert.equal(done.ss.status().needsReboot, false);
+  const cmd = rig({ method: 'command' }, { hp: { procCmdline: path.join(d, 'nope'), cmdlines: [boot], param } });
+  cmd.ss.ensureHotplug();
+  assert.equal(cmd.ss.status().needsReboot, false);
+});
+
+test('switching off goes through on first, so a stale "already off" state cannot swallow it', async () => {
+  const r = rig({});
+  const writes = [];
+  const orig = fs.writeFileSync;
+  fs.writeFileSync = (f, v, ...a) => { if (f === r.fb) writes.push(String(v)); return orig(f, v, ...a); };
+  try { await r.ss._hdmi(false); } finally { fs.writeFileSync = orig; }
+  assert.deepEqual(writes, ['0', '4']);
 });

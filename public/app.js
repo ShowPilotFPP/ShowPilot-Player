@@ -1395,7 +1395,8 @@
       const box = $('#ssState');
       if (!box || !st) return;
       box.innerHTML = st.asleep ? '<span class="pill">Screen off</span>' : `<span class="pill ok">Screen on</span>${st.enabled && !st.keepAwake && st.idleForMs != null ? ` <span class="dim">idle ${Math.floor(st.idleForMs / 60000)} of ${st.idleMinutes} min</span>` : st.keepAwake ? ` <span class="dim">${esc(st.keepAwake)}</span>` : ''}`
-        + (st.lastError ? ` <span class="pill warn" title="${esc(st.lastError)}">last switch failed</span>` : '');
+        + (st.lastError ? ` <span class="pill warn" title="${esc(st.lastError)}">last switch failed</span>` : '')
+        + (st.needsReboot ? ` <span class="pill warn" title="A one-time boot setting keeps the monitor from waking itself back up. Reboot under Settings → Power.">Reboot once to finish setup</span>` : '');
     };
     ssState();
     pageTimer = setInterval(ssState, 2000);
