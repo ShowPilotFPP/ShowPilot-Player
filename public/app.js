@@ -1359,6 +1359,7 @@
     el.innerHTML = `
       <div class="card"><h3>Video</h3>
         <label class="inline"><input type="checkbox" id="vidOn" ${CONFIG.video.enabled ? 'checked' : ''}> Play a playlist item's video on HDMI</label>
+        <label class="inline"><input type="checkbox" id="vidAddr" ${CONFIG.video.idleAddress ? 'checked' : ''}> Show this player's address on the screen when nothing is playing (otherwise the screen stays black)</label>
         <p class="dim">Video follows the audio clock (speed nudges for small drift, exact seek for large). When MultiSync is on, FPP remotes get the media sync packets and play the same video.</p></div>
       <div class="card"><h3>Virtual matrix</h3>
         <label class="inline"><input type="checkbox" id="mOn" ${m.enabled ? 'checked' : ''}> Show a channel range as a matrix on HDMI</label>
@@ -1373,7 +1374,7 @@
         <div class="row" style="margin-top:12px">
           <label class="inline"><input type="checkbox" id="mSerp" ${m.serpentine ? 'checked' : ''}> Zig-zag (serpentine)</label>
           <label class="inline"><input type="checkbox" id="mPrefer" ${m.preferVideo ? 'checked' : ''}> Prefer a matching video in videos/ (same name as the sequence)</label></div>
-        <p class="dim">Matches an xLights matrix model's layout. A real video is sharper than rendered pixels, so it wins when one is found. Matrix and display changes apply after a restart (Settings → Power).</p>
+        <p class="dim">Matches an xLights matrix model's layout. A real video is sharper than rendered pixels, so it wins when one is found. Changes apply right away.</p>
         <button class="btn primary" id="saveDisp">Save</button></div>
       <div class="card"><div class="row"><h3 style="margin:0">Screen sleep</h3><span class="spacer"></span><span id="ssState"></span></div>
         <p class="muted">Turns the HDMI screen off when nothing has played for a while, and back on when something plays. Most PC monitors go into standby when the signal stops.</p>
@@ -1411,7 +1412,7 @@
     $('#ssSleep').onclick = ssDo('sleep');
     $('#ssWake').onclick = ssDo('wake');
     $('#saveDisp').onclick = guard(() => saveConfig({
-      video: { enabled: $('#vidOn').checked },
+      video: { enabled: $('#vidOn').checked, idleAddress: $('#vidAddr').checked },
       matrix: { enabled: $('#mOn').checked, startChannel: +$('#mStart').value, width: +$('#mW').value, height: +$('#mH').value, colorOrder: $('#mOrder').value,
         startCorner: $('#mCorner').value, orientation: $('#mOrient').value, serpentine: $('#mSerp').checked, preferVideo: $('#mPrefer').checked },
     }));
