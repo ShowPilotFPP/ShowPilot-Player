@@ -1,17 +1,14 @@
 # Build the flashable Raspberry Pi SD card image and attach it to a GitHub
-# Release. Building takes about an hour, so on a normal release it only runs
-# when the image recipe changed (image/, the service file); app-only releases
-# reach players through the in-app updater and need no new image. Run it by
-# hand ("Run workflow", give a tag) to build an image for any release.
+# Release. Manual only (Actions -> "Build SD card image" -> Run workflow, give
+# a tag): a build takes about an hour of Actions time, and players update in
+# place (Settings -> Updates), so releases never build one on their own.
 name: Build SD card image
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to build (e.g. v0.1.0)"
+        description: "Release tag to build (e.g. v0.6.3)"
         required: true
 
 permissions:
@@ -23,49 +20,25 @@ jobs:
     timeout-minutes: 180
     steps:
       - name: Work out the tag
-        run: echo "TAG=${{ github.event.release.tag_name || inputs.tag }}" >> "$GITHUB_ENV"
+        run: echo "TAG=${{ inputs.tag }}" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
           fetch-depth: 0
 
-      - name: Does this release need a new image?
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          BUILD=true
-          if [ "${{ github.event_name }}" = "release" ]; then
-            # Compare with the newest earlier release that actually has an
-            # image attached, not just the previous tag: a cancelled or failed
-            # build (v0.1.3) must not leave every later release skipping it.
-            PREV=""
-            for t in $(git tag --sort=-v:refname --merged "$TAG"); do
-              [ "$t" = "$TAG" ] && continue
-              if gh release view "$t" --json assets -q '.assets[].name' 2>/dev/null | grep -q '[.]img[.]xz$'; then PREV="$t"; break; fi
-            done
-            if [ -n "$PREV" ] && git diff --quiet "$PREV" "$TAG" -- image/ scripts/showpilot-player.service; then
-              BUILD=false
-              echo "::notice::Image recipe unchanged since $PREV (the last release with an image), so no new image. Players update in place (Settings -> Updates). Run this workflow by hand to build one anyway."
-            fi
-          fi
-          echo "BUILD=$BUILD" >> "$GITHUB_ENV"
-
       - name: Free disk space (pi-gen needs ~15 GB)
-        if: env.BUILD == 'true'
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
           df -h /
 
       - name: Enable arm64 emulation
-        if: env.BUILD == 'true'
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
 
       - name: Build image
-        if: env.BUILD == 'true'
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q binfmt-support qemu-user-static
           sudo install -d -o "$USER" /mnt/spp-pigen
@@ -73,7 +46,6 @@ jobs:
           ls -lh image/out
 
       - name: Attach to the release
-        if: env.BUILD == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$TAG" image/out/*.img.xz image/out/*.sha256 --clobber
