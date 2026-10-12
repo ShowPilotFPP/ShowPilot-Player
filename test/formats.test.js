@@ -272,3 +272,11 @@ test('all controllers start together: a small controller is done early, not sque
   assert.equal(last.filter((x) => x.small).length, 2);
   assert.ok(smallDone - t0 < (t1 - t0) * 0.3, `small controller done at ${(smallDone - t0).toFixed(1)} of ${(t1 - t0).toFixed(1)} ms`);
 });
+
+test('channel ranges reported to xLights include the virtual matrix', () => {
+  const { MultiSync } = require('../lib/multisync');
+  const ranges = (cfg) => MultiSync.prototype.channelRanges.call({ cfg });
+  assert.equal(ranges({ outputs: [], matrix: { enabled: true, startChannel: 3065, width: 240, height: 240 } }), '3064-175863');
+  assert.equal(ranges({ outputs: [{ type: 'ddp', startChannel: 1, channelCount: 2044 }], matrix: { enabled: false } }), '0-2043');
+  assert.equal(ranges({ outputs: [] }), '0-0');
+});

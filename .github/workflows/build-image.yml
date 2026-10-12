@@ -31,13 +31,22 @@ jobs:
           fetch-depth: 0
 
       - name: Does this release need a new image?
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BUILD=true
           if [ "${{ github.event_name }}" = "release" ]; then
-            PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+            # Compare with the newest earlier release that actually has an
+            # image attached, not just the previous tag: a cancelled or failed
+            # build (v0.1.3) must not leave every later release skipping it.
+            PREV=""
+            for t in $(git tag --sort=-v:refname --merged "$TAG"); do
+              [ "$t" = "$TAG" ] && continue
+              if gh release view "$t" --json assets -q '.assets[].name' 2>/dev/null | grep -q '[.]img[.]xz$'; then PREV="$t"; break; fi
+            done
             if [ -n "$PREV" ] && git diff --quiet "$PREV" "$TAG" -- image/ scripts/showpilot-player.service; then
               BUILD=false
-              echo "::notice::Image recipe unchanged since $PREV, so no new image. Players update in place (System -> Updates). Run this workflow by hand to build one anyway."
+              echo "::notice::Image recipe unchanged since $PREV (the last release with an image), so no new image. Players update in place (Settings -> Updates). Run this workflow by hand to build one anyway."
             fi
           fi
           echo "BUILD=$BUILD" >> "$GITHUB_ENV"
