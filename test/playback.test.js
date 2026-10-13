@@ -146,3 +146,31 @@ test('master dimmer scales what goes out (Start Main Show fade), not the sequenc
     rx.close();
   }
 });
+
+test('remote: audio it does not have is not "played", and a silent master stops it', { skip, timeout: 30000 }, async () => {
+  const paths = require('../lib/paths');
+  const { writeFseq } = require('../lib/fseq');
+  const config = require('../lib/config');
+  const { Player } = require('../lib/engine/player');
+  paths.ensureLayout();
+  config.load();
+  const frames = [];
+  for (let i = 0; i < 400; i++) frames.push(Buffer.alloc(30));
+  writeFseq(paths.fileIn('sequences', 'remote.fseq'), { channelCount: 30, frames, stepMs: 25 });
+  const p = new Player(config);
+  await p.start();
+  try {
+    // End of a song: the master's media syncs for an mp3 this remote doesn't have.
+    await p.followMaster({ media: 'Not Here.mp3', seconds: 120 });
+    await p.followMaster({ media: 'Not Here.mp3', seconds: 120.5 });
+    assert.equal(p.state, 'idle', 'nothing to play: stays idle (was stuck "playing" before 0.7.2)');
+    // A sequence it has: follows it.
+    await p.followMaster({ sequence: 'remote.fseq', seconds: 0 });
+    assert.equal(p.state, 'playing');
+    assert.equal(p.clockSource, 'external');
+    // The master goes quiet: the remote stops by itself.
+    p.followTimeoutMs = 600;
+    await wait(1500);
+    assert.equal(p.state, 'idle', 'stopped after the master went quiet');
+  } finally { await p.close(); }
+});
