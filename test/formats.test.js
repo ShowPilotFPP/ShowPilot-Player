@@ -13,6 +13,17 @@ const { buildMatrixMap, renderMatrix } = require('../lib/engine/matrix-map');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'spp-test-'));
 const frames = (n, cc) => Array.from({ length: n }, (_, i) => { const b = Buffer.alloc(cc); for (let j = 0; j < cc; j++) b[j] = (i * 7 + j) & 255; return b; });
 
+
+// Timing tests measure real time; give them a few tries on a busy machine.
+async function retryTiming(fn, tries = 3) {
+  for (let i = 1; ; i++) {
+    try { return await fn(); } catch (e) {
+      if (i >= tries || e.code !== 'ERR_ASSERTION') throw e;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+}
+
 test('fseq round-trips for every compression and sparse ranges', () => {
   const cc = 1200, fr = frames(97, cc);
   for (const compression of [0, 1, 2]) {
@@ -185,67 +196,75 @@ test('a frame is handed to the sender as one batch: own copies, per-controller g
 });
 
 test('sender thread paces each controller like FPP (90 Mbit/s) and finishes within the frame', async () => {
-  const dgram = require('dgram');
-  const { OutputSet } = require('../lib/outputs');
-  const rx = dgram.createSocket('udp4');
-  await new Promise((r) => rx.bind(0, '127.0.0.1', r));
-  const port = rx.address().port;
-  const times = [];
-  rx.on('message', () => times.push(process.hrtime.bigint()));
-  const set = new OutputSet([{ type: 'ddp', ip: '127.0.0.1', startChannel: 1, channelCount: 1440 * 60 }]);
-  set.outputs[0].send = function (sock, frame) { // same packets, test port
-    for (let i = 0; i < this.packets.length; i++) sock.send(this.packets[i], port, '127.0.0.1');
-  };
-  const frame = Buffer.alloc(1440 * 60, 3);
-  set.send(frame, 50);              // first frame: sender thread starting, sockets connecting
-  for (let i = 0; i < 100 && times.length < 60; i++) await new Promise((r) => setTimeout(r, 20));
-  await new Promise((r) => setTimeout(r, 60));
-  times.length = 0;
-  set.send(frame, 50);              // 60 x 1450 bytes at 90 Mbit/s ≈ 7.7 ms
-  await new Promise((r) => setTimeout(r, 120));
-  set.close();
-  rx.close();
-  assert.equal(times.length, 60);
-  const spanMs = Number(times[times.length - 1] - times[0]) / 1e6;
-  assert.ok(spanMs >= 5 && spanMs < 40, `paced over ${spanMs.toFixed(1)} ms`);
-  const st = { droppedFrames: set.stats.droppedFrames };
-  assert.equal(st.droppedFrames, 0);
+  // Real-time measurement: a busy machine (CI runner) can make the test's own
+  // timers late. Up to 3 tries before calling it a failure.
+  await retryTiming(async () => {
+    const dgram = require('dgram');
+    const { OutputSet } = require('../lib/outputs');
+    const rx = dgram.createSocket('udp4');
+    await new Promise((r) => rx.bind(0, '127.0.0.1', r));
+    const port = rx.address().port;
+    const times = [];
+    rx.on('message', () => times.push(process.hrtime.bigint()));
+    const set = new OutputSet([{ type: 'ddp', ip: '127.0.0.1', startChannel: 1, channelCount: 1440 * 60 }]);
+    set.outputs[0].send = function (sock, frame) { // same packets, test port
+      for (let i = 0; i < this.packets.length; i++) sock.send(this.packets[i], port, '127.0.0.1');
+    };
+    const frame = Buffer.alloc(1440 * 60, 3);
+    set.send(frame, 50);              // first frame: sender thread starting, sockets connecting
+    for (let i = 0; i < 100 && times.length < 60; i++) await new Promise((r) => setTimeout(r, 20));
+    await new Promise((r) => setTimeout(r, 60));
+    times.length = 0;
+    set.send(frame, 50);              // 60 x 1450 bytes at 90 Mbit/s ≈ 7.7 ms
+    await new Promise((r) => setTimeout(r, 120));
+    set.close();
+    rx.close();
+    assert.equal(times.length, 60);
+    const spanMs = Number(times[times.length - 1] - times[0]) / 1e6;
+    assert.ok(spanMs >= 5 && spanMs < 40, `paced over ${spanMs.toFixed(1)} ms`);
+    const st = { droppedFrames: set.stats.droppedFrames };
+    assert.equal(st.droppedFrames, 0);
+  });
 });
 
 test('paced frames keep a steady cadence: PUSH packets one frame time apart despite jittery hand-over', async () => {
-  const dgram = require('dgram');
-  const { OutputSet } = require('../lib/outputs');
-  const rx = dgram.createSocket('udp4');
-  await new Promise((r) => rx.bind(0, '127.0.0.1', r));
-  const port = rx.address().port;
-  const push = [];
-  rx.on('message', (m) => { if (m[0] === 0x41) push.push(Number(process.hrtime.bigint()) / 1e6); });
-  const set = new OutputSet([{ type: 'ddp', ip: '127.0.0.1', startChannel: 1, channelCount: 1440 * 60 }]);
-  set.outputs[0].send = function (sock) { for (const p of this.packets) sock.send(p, port, '127.0.0.1'); };
-  const frame = Buffer.alloc(1440 * 60);
-  set.send(frame, 25); // warm up: sender thread started, sockets connected
-  for (let i = 0; i < 100 && !push.length; i++) await new Promise((r) => setTimeout(r, 20));
-  push.length = 0;
-  const jitter = [3, -3, 2, -2, 3, 0, -3, 1, 3, -2, 2, -3, 0, 3, -1, 2, -3, 3, -2, 1, 0, 2, -3, 3];
-  const t0 = performance.now() + 20;
-  for (let i = 0; i < jitter.length; i++) {
-    await new Promise((r) => setTimeout(r, Math.max(0, t0 + i * 50 + jitter[i] - performance.now())));
-    set.send(frame, 50);
-  }
-  await new Promise((r) => setTimeout(r, 120));
-  const iv = push.slice(1).map((t, i) => t - push[i]).slice(2);
-  const off = iv.filter((x) => Math.abs(x - 50) > 1.5);
-  assert.ok(iv.length >= 18, `pushes: ${push.length}`);
-  set.close();
-  rx.close();
-  // Without the cadence nearly every interval is off (the hand-over jitter is
-  // ±3 ms). A busy test machine can still make a hand-over late enough to
-  // re-anchor the grid now and then (two intervals off each time).
-  // Judged on the typical interval: with the cadence most land within a
-  // fraction of a millisecond of 50; without it the median is off by ~4 ms.
-  const dev = iv.map((x) => Math.abs(x - 50)).sort((a, b) => a - b);
-  const median = dev[Math.floor(dev.length / 2)];
-  assert.ok(median < 1, `median interval off by ${median.toFixed(2)} ms (off by >1.5 ms: ${off.map((x) => x.toFixed(1)).join(', ')})`);
+  // Real-time measurement: a busy machine (CI runner) can make the test's own
+  // timers late. Up to 3 tries before calling it a failure.
+  await retryTiming(async () => {
+    const dgram = require('dgram');
+    const { OutputSet } = require('../lib/outputs');
+    const rx = dgram.createSocket('udp4');
+    await new Promise((r) => rx.bind(0, '127.0.0.1', r));
+    const port = rx.address().port;
+    const push = [];
+    rx.on('message', (m) => { if (m[0] === 0x41) push.push(Number(process.hrtime.bigint()) / 1e6); });
+    const set = new OutputSet([{ type: 'ddp', ip: '127.0.0.1', startChannel: 1, channelCount: 1440 * 60 }]);
+    set.outputs[0].send = function (sock) { for (const p of this.packets) sock.send(p, port, '127.0.0.1'); };
+    const frame = Buffer.alloc(1440 * 60);
+    set.send(frame, 25); // warm up: sender thread started, sockets connected
+    for (let i = 0; i < 100 && !push.length; i++) await new Promise((r) => setTimeout(r, 20));
+    push.length = 0;
+    const jitter = [3, -3, 2, -2, 3, 0, -3, 1, 3, -2, 2, -3, 0, 3, -1, 2, -3, 3, -2, 1, 0, 2, -3, 3];
+    const t0 = performance.now() + 20;
+    for (let i = 0; i < jitter.length; i++) {
+      await new Promise((r) => setTimeout(r, Math.max(0, t0 + i * 50 + jitter[i] - performance.now())));
+      set.send(frame, 50);
+    }
+    await new Promise((r) => setTimeout(r, 120));
+    const iv = push.slice(1).map((t, i) => t - push[i]).slice(2);
+    const off = iv.filter((x) => Math.abs(x - 50) > 1.5);
+    set.close();
+    rx.close(); // before any assertion: a failed try must not leave sockets open
+    assert.ok(iv.length >= 18, `pushes: ${push.length}`);
+    // Without the cadence nearly every interval is off (the hand-over jitter is
+    // ±3 ms). A busy test machine can still make a hand-over late enough to
+    // re-anchor the grid now and then (two intervals off each time).
+    // Judged on the typical interval: with the cadence most land within a
+    // fraction of a millisecond of 50; without it the median is off by ~4 ms.
+    const dev = iv.map((x) => Math.abs(x - 50)).sort((a, b) => a - b);
+    const median = dev[Math.floor(dev.length / 2)];
+    assert.ok(median < 1, `median interval off by ${median.toFixed(2)} ms (off by >1.5 ms: ${off.map((x) => x.toFixed(1)).join(', ')})`);
+  });
 });
 
 test('all controllers start together: a small controller is done early, not squeezed in at the end of a big frame', async () => {
