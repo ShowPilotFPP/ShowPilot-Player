@@ -96,6 +96,7 @@ module.exports = function playerRoutes(ctx) {
       music: ctx.bgm ? ctx.bgm.status() : null,
       problems: [
         ...require('../lib/health').outputProblems(config.get()),
+        ...(ctx.screen && ctx.screen.isStuck() ? [`The Pi's display driver is stuck after a graphics chip hang: the screen can't show anything or switch off until a reboot.${ctx.screen.cfg.rebootIfStuck !== false ? ' The Pi reboots by itself after 2 idle minutes.' : ' Reboot under Settings → Power.'}`] : []),
         ...require('../lib/health').missing().map((d) => `${d.bin} is not installed (${d.why}). Install it under Settings → Updates → System software.`),
         ...(player.problems || []),
       ],

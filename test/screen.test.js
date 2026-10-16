@@ -20,7 +20,7 @@ function rig(cfg, { schedule = {}, hp = null } = {}) {
   const ran = [];
   const ss = new ScreenSleep({
     config: { get: () => ({ screenSleep: { enabled: true, idleMinutes: 5, method: 'hdmi', keepAwakeDuringShows: true, ...cfg } }) },
-    player, scheduler, now: () => now, fbPath: fb, hotplug: hp || { procCmdline: '/nonexistent' }, shell: async (c) => { ran.push(c); return { ok: true, out: '' }; },
+    player, scheduler, now: () => now, fbPath: fb, stampPath: path.join(path.dirname(fb), 'stamp.json'), hotplug: hp || { procCmdline: '/nonexistent' }, shell: async (c) => { ran.push(c); return { ok: true, out: '' }; },
   });
   return { ss, player, scheduler, fb, ran, advance: (ms) => { now += ms; }, now: () => now };
 }
@@ -121,4 +121,54 @@ test('switching off goes through on first, so a stale "already off" state cannot
   fs.writeFileSync = (f, v, ...a) => { if (f === r.fb) writes.push(String(v)); return orig(f, v, ...a); };
   try { await r.ss._hdmi(false); } finally { fs.writeFileSync = orig; }
   assert.deepEqual(writes, ['0', '4']);
+});
+
+test('display driver stuck (switch-off refused): no fake "off", reboot once when idle, not again within 6 h', async () => {
+  const r = rig({});
+  const orig = fs.writeFileSync;
+  fs.writeFileSync = (f, v, ...a) => { if (f === r.fb && String(v) === '4') { const e = new Error('Device or resource busy'); e.code = 'EBUSY'; throw e; } return orig(f, v, ...a); };
+  try {
+    const res = await r.ss.sleep('idle');
+    assert.equal(res.ok, false);
+    assert.match(r.ss.status().lastError, /stuck/);
+    assert.equal(r.ss.status().stuck, true);
+    assert.ok(!r.ran.some((c) => /vcgencmd/.test(c)), 'no vcgencmd "success" on a KMS Pi');
+  } finally { fs.writeFileSync = orig; }
+  // Something plays: no reboot.
+  r.player.state = 'playing';
+  await r.ss.tick(); r.advance(5 * 60000); await r.ss.tick();
+  assert.ok(!r.ran.includes('systemctl reboot'));
+  // Idle: reboot after 2 minutes.
+  r.player.state = 'idle';
+  await r.ss.tick();
+  r.advance(60000); await r.ss.tick();
+  assert.ok(!r.ran.includes('systemctl reboot'), 'not before 2 idle minutes');
+  r.advance(61000); await r.ss.tick();
+  assert.equal(r.ran.filter((c) => c === 'systemctl reboot').length, 1);
+  // Came back still stuck (new instance, same stamp file): no reboot loop within 6 h.
+  const again = new (require('../lib/screen-sleep').ScreenSleep)({ config: r.ss.config, player: r.player, scheduler: r.scheduler, now: r.now,
+    fbPath: r.fb, stampPath: r.ss.stampPath, hotplug: { procCmdline: '/nonexistent' }, shell: async (c) => { r.ran.push(c); return { ok: true, out: '' }; } });
+  r.player.displayStuck = true;
+  await again.tick(); r.advance(3 * 60000); await again.tick(); await again.tick();
+  assert.equal(r.ran.filter((c) => c === 'systemctl reboot').length, 1, 'once per 6 hours');
+  r.advance(6 * 3600000); await again.tick(); r.advance(3 * 60000); await again.tick();
+  assert.equal(r.ran.filter((c) => c === 'systemctl reboot').length, 2);
+  // Option off: never.
+  const off = rig({ rebootIfStuck: false });
+  off.player.displayStuck = true;
+  await off.ss.tick(); off.advance(10 * 60000); await off.ss.tick();
+  assert.ok(!off.ran.includes('systemctl reboot'));
+});
+
+test('mpv supervisor: a crash just before stop() does not bring the process back', async () => {
+  const Mpv = require('../lib/engine/mpv');
+  const m = new Mpv('crashy', [], { bin: '/bin/false' });
+  let starts = 0;
+  const start = m.start.bind(m);
+  m.start = () => { starts++; return start(); };
+  m.start();
+  await new Promise((r) => m.once('exit', r)); // crashed; supervisor restart pending (1 s)
+  await m.stop();
+  await new Promise((r) => setTimeout(r, 1500));
+  assert.equal(starts, 1, 'no restart after stop (it used to grab the screen again)');
 });

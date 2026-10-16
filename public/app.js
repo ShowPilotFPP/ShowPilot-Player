@@ -1405,6 +1405,7 @@
           <label>Command to turn it off <input id="ssSleepCmd" class="mono" value="${esc(ss.sleepCommand || '')}" placeholder="e.g. ddcutil setvcp D6 05"></label>
           <label>Command to turn it on <input id="ssWakeCmd" class="mono" value="${esc(ss.wakeCommand || '')}" placeholder="e.g. ddcutil setvcp D6 01"></label>
         </div>
+        <label class="inline" style="margin-top:12px"><input type="checkbox" id="ssStuck" ${ss.rebootIfStuck !== false ? 'checked' : ''}> If the display gets stuck (the Pi's graphics chip hangs), reboot the Pi by itself once nothing is playing (at most every 6 hours)</label>
         <label class="inline" style="margin-top:12px"><input type="checkbox" id="ssShows" ${ss.keepAwakeDuringShows !== false ? 'checked' : ''}> Keep it on through scheduled shows, and wake it 2 minutes before one starts</label>
         <p class="dim">A sleeping monitor takes a few seconds to wake. During scheduled shows it stays on, so the first song isn't missed; a song started by hand wakes it right away.</p>
         <div class="row"><button class="btn primary" id="saveSS">Save</button><span class="spacer"></span><button class="btn" id="ssSleep"><i class="fas fa-moon"></i> Turn off now</button><button class="btn" id="ssWake"><i class="fas fa-sun"></i> Turn on now</button></div></div>`;
@@ -1414,13 +1415,14 @@
       if (!box || !st) return;
       box.innerHTML = st.asleep ? '<span class="pill">Screen off</span>' : `<span class="pill ok">Screen on</span>${st.enabled && !st.keepAwake && st.idleForMs != null ? ` <span class="dim">idle ${Math.floor(st.idleForMs / 60000)} of ${st.idleMinutes} min</span>` : st.keepAwake ? ` <span class="dim">${esc(st.keepAwake)}</span>` : ''}`
         + (st.lastError ? ` <span class="pill warn" title="${esc(st.lastError)}">last switch failed</span>` : '')
+        + (st.stuck ? ' <span class="pill bad" title="The graphics chip hung and the display driver did not recover. A reboot clears it.">Display stuck: reboot needed</span>' : '')
         + (st.needsReboot ? ` <span class="pill warn" title="A one-time boot setting keeps the monitor from waking itself back up. Reboot under Settings → Power.">Reboot once to finish setup</span>` : '');
     };
     ssState();
     pageTimer = setInterval(ssState, 2000);
     $('#ssMethod').onchange = () => { $('#ssCmds').hidden = $('#ssMethod').value !== 'command'; };
     $('#saveSS').onclick = guard(() => saveConfig({ screenSleep: { enabled: $('#ssOn').checked, idleMinutes: Math.max(1, +$('#ssMin').value || 5), method: $('#ssMethod').value,
-      keepAwakeDuringShows: $('#ssShows').checked, sleepCommand: $('#ssSleepCmd').value.trim(), wakeCommand: $('#ssWakeCmd').value.trim() } }));
+      keepAwakeDuringShows: $('#ssShows').checked, rebootIfStuck: $('#ssStuck').checked, sleepCommand: $('#ssSleepCmd').value.trim(), wakeCommand: $('#ssWakeCmd').value.trim() } }));
     const ssDo = (what) => guard(async () => {
       const r = await api('POST', P('/screen/' + what));
       if (STATUS) STATUS.screen = r.status;

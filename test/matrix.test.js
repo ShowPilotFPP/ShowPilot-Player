@@ -66,6 +66,13 @@ test('virtual matrix shows a sparse sequence at its show channel numbers', { ski
     assert.ok(proc.exitCode !== null || proc.signalCode !== null, 'display mpv exited before suspend returned');
     assert.equal(await p.resumeDisplay(), true);
     assert.ok(p.display && p.display.ready, 'display back after wake');
+    // The screen program stops answering (GPU hang): two timeouts -> restarted.
+    const before = p.display;
+    p._displayFailed(new Error('timeout waiting for file-loaded'));
+    p._displayFailed(new Error('timeout waiting for file-loaded'));
+    for (let i = 0; i < 100 && (p.display === before || !p.display || !p.display.ready); i++) await wait(50);
+    assert.ok(p.display && p.display !== before && p.display.ready, 'a new display mpv');
+    assert.equal(p.displayStuck, undefined);
   } finally {
     await p.close();
   }
