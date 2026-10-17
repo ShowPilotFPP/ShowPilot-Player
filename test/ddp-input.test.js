@@ -83,3 +83,61 @@ test('virtual matrix from DDP: raw and xLights-style offsets, torn frames held b
     await p.close();
   }
 });
+
+test('DDP arriving while the screen sleeps: it wakes and shows the matrix (was black before 0.8.1)', { skip, timeout: 60000 }, async () => {
+  const config = require('../lib/config');
+  const { Player } = require('../lib/engine/player');
+  const p = new Player(config);
+  const tx = dgram.createSocket('udp4');
+  await p.start();
+  // Screen sleep's wake on activity, as server.js wires it.
+  p.on('activity', () => { p.resumeDisplay().catch(() => {}); });
+  const send = async (pkts) => { for (const pk of pkts) await new Promise((r) => tx.send(pk, PORT, '127.0.0.1', r)); };
+  try {
+    await p.suspendDisplay();
+    assert.equal(p.display, null, 'asleep');
+    for (let i = 0; i < 20; i++) { await send(packets(solid(0, 255, 0), START - 1)); await wait(25); }
+    assert.ok(await until(() => p.display && p.display.ready && p.displayMode === 'matrix', 8000), `matrix after waking (mode ${p.displayMode})`);
+    for (let i = 0; i < 10; i++) { await send(packets(solid(0, 255, 0), START - 1)); await wait(25); }
+    const f = path.join(process.env.SPP_MEDIA_DIR, 'wake.png');
+    await p.display.command('screenshot-to-file', f, 'video');
+    const raw = execFileSync('ffmpeg', ['-loglevel', 'error', '-i', f, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+    assert.deepEqual([...raw.subarray(0, 3)], [0, 255, 0]);
+  } finally {
+    tx.close();
+    await p.close();
+  }
+});
+
+test('a lost packet or two still draws the frame (patched), a second sender is ignored', { skip, timeout: 60000 }, async () => {
+  const config = require('../lib/config');
+  const { Player } = require('../lib/engine/player');
+  const w = 160, h = 90, len = w * h * 3; // 30 packets per frame
+  config.update({ matrix: { ...config.get().matrix, width: w, height: h } });
+  const p = new Player(config);
+  const tx = dgram.createSocket('udp4');
+  const tx2 = dgram.createSocket('udp4');
+  await new Promise((r) => tx2.bind(0, '127.0.0.2', r));
+  await p.start();
+  const fill = (r, g, b) => { const f = Buffer.alloc(len); for (let i = 0; i < len; i += 3) { f[i] = r; f[i + 1] = g; f[i + 2] = b; } return f; };
+  const send = async (pkts, s = tx) => { for (const pk of pkts) await new Promise((r) => s.send(pk, PORT, '127.0.0.1', r)); };
+  try {
+    for (let i = 0; i < 5; i++) { await send(packets(fill(255, 0, 0), START - 1)); await wait(25); }
+    assert.ok(await until(() => p.displayMode === 'matrix'));
+    await send(packets(fill(0, 0, 255), START - 1, { drop: 29 - 1 })); // 1 of 30 lost (not the PUSH one)
+    await wait(1200);
+    const net = p.workerStats.net;
+    assert.ok(net.partial >= 1, `patched frames ${JSON.stringify(net)}`);
+    const f = path.join(process.env.SPP_MEDIA_DIR, 'patched.png');
+    await p.display.command('screenshot-to-file', f, 'video');
+    const raw = execFileSync('ffmpeg', ['-loglevel', 'error', '-i', f, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+    assert.deepEqual([...raw.subarray(0, 3)], [0, 0, 255], 'the new frame is shown');
+    // Another sender while the first is active: ignored.
+    for (let i = 0; i < 3; i++) { await send(packets(fill(0, 255, 0), START - 1)); await send(packets(fill(255, 255, 255), START - 1), tx2); await wait(25); }
+    await wait(1100);
+    assert.ok(p.workerStats.net.ignored > 0 && p.workerStats.net.ignoredFrom === '127.0.0.2', JSON.stringify(p.workerStats.net));
+  } finally {
+    tx.close(); tx2.close();
+    await p.close();
+  }
+});

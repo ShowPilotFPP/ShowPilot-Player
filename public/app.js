@@ -371,7 +371,7 @@
       ['Late >20 ms (song)', w.total ? `${w.total.over20} of ${w.total.frames}` : '0'], ['Block decode', `${w.maxDecodeMs ?? 0} ms`],
       ['Output send', w.outputs && w.outputs.sender ? `${w.outputs.sender.maxSendMs.toFixed(1)} ms${w.outputs.pacingMbps ? ` @ ${w.outputs.pacingMbps} Mbit/s` : ' (unpaced)'}` : '—'],
       ['Output frames dropped', w.outputs ? w.outputs.droppedFrames : 0],
-      ...(w.net ? [['Matrix DDP in', w.net.active ? `${w.net.fps} fps · ${w.net.incomplete} skipped` : 'waiting']] : []),
+      ...(w.net ? [['Matrix DDP in', w.net.active ? `${w.net.fps} fps · ${w.net.partial} patched · ${w.net.incomplete} skipped${w.net.ignored ? ` · ignoring ${w.net.ignoredFrom}` : ''}` : 'waiting']] : []),
       ['Audio out', p.audioOut || '—'], ['Display', p.display], ['Screen', STATUS.screen ? (STATUS.screen.asleep ? 'off (sleeping)' : STATUS.screen.enabled ? 'on' : 'on (no sleep)') : '—'], ['MultiSync', STATUS.multisync.sending ? 'sending' : STATUS.mode === 'remote' ? `following ${STATUS.multisync.lastMaster || '—'}` : 'off'],
     ].map(([k, v]) => `<div class="stat"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('');
   }
@@ -1348,7 +1348,7 @@
           <div class="row"><button class="btn" data-test="rgbcycle">RGB cycle</button><button class="btn" data-test="chase">Chase</button>
           <button class="btn" data-test="solid" data-color="255,255,255">White</button><button class="btn" data-test="solid" data-color="255,0,0">Red</button>
           <button class="btn" data-test="solid" data-color="0,255,0">Green</button><button class="btn" data-test="solid" data-color="0,0,255">Blue</button>
-          <button class="btn primary" data-test="">Off</button></div></div>`;
+          <button class="btn" data-test="">Off</button></div></div>`;
       $('#saveTiming').onclick = guard(() => saveConfig({ syncOffsetMs: +$('#offset').value || 0, blankBetweenSequences: $('#blank').checked, outputPacingMbps: Math.max(0, +$('#pacing').value || 0) }));
       $$('[data-add]', el).forEach((b) => (b.onclick = () => {
         const last = outs[outs.length - 1];
@@ -1365,7 +1365,21 @@
         $('[data-rm]', tr).onclick = () => { outs.splice(+tr.dataset.i, 1); render(); };
       });
       $('#saveOuts').onclick = guard(async () => { await saveConfig({ outputs: outs }, 'Outputs saved'); outs = clone(CONFIG.outputs); render(); });
-      $$('[data-test]', el).forEach((b) => (b.onclick = guard(() => api('POST', P('/test'), { pattern: b.dataset.test || null, color: b.dataset.color ? b.dataset.color.split(',').map(Number) : undefined }))));
+      // The running pattern is highlighted (Off only when nothing runs).
+      const markTest = () => {
+        const cur = (STATUS && STATUS.player && STATUS.player.testPattern) || '';
+        $$('[data-test]', el).forEach((b) => {
+          const key = b.dataset.test === 'solid' ? `solid:${b.dataset.color}` : b.dataset.test;
+          b.classList.toggle('primary', key === cur);
+        });
+      };
+      markTest();
+      clearInterval(pageTimer);
+      pageTimer = setInterval(markTest, 1000);
+      $$('[data-test]', el).forEach((b) => (b.onclick = guard(async () => {
+        await api('POST', P('/test'), { pattern: b.dataset.test || null, color: b.dataset.color ? b.dataset.color.split(',').map(Number) : undefined });
+        await pollStatus(); markTest();
+      })));
     };
     render();
   };
@@ -1386,7 +1400,7 @@
           <label>Picture comes from <select id="mSrc"><option value="sequence" ${m.source !== 'network' ? 'selected' : ''}>This player's sequences (uploaded with FPP Connect)</option><option value="network" ${m.source === 'network' ? 'selected' : ''}>DDP from the network (main player or xLights)</option></select></label>
           <label id="mOffWrap" ${m.source === 'network' ? '' : 'hidden'}>DDP channel numbers <select id="mOff">${[['auto', 'Detect automatically'], ['raw', 'Show channel numbers (ShowPilot Player / FPP output)'], ['relative', 'Start at 0 (xLights DDP controller)']].map(([v, l]) => `<option value="${v}" ${v === (m.ddpOffset || 'auto') ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         </div>
-        <p class="dim" id="mNetHelp" ${m.source === 'network' ? '' : 'hidden'}>On the main player add a DDP controller output to this player's address covering the matrix channels (start ${m.startChannel}, ${(m.width * m.height * 3).toLocaleString()} channels); in xLights, a DDP controller pointing here works too. Frames with a missing piece are skipped (the last one stays up) so the picture never tears. Wired network recommended (about ${Math.round(m.width * m.height * 3 * 40 * 8 / 1e6)} Mbit/s at 40 fps).</p>
+        <p class="dim" id="mNetHelp" ${m.source === 'network' ? '' : 'hidden'}>On the main player add a DDP controller output to this player's address covering the matrix channels (start ${m.startChannel}, ${(m.width * m.height * 3).toLocaleString()} channels); in xLights, a DDP controller pointing here works too. Frames with a missing piece are skipped (the last one stays up) so the picture never tears. Wired network recommended (about ${Math.round(m.width * m.height * 3 * 40 * 8 / 1e6)} Mbit/s at 40 fps).${m.width * m.height * 3 * 40 * 8 / 1e6 > 150 ? ` <b class="err">That is more than DDP can carry reliably (the main player paces each controller at 90 Mbit/s): use this player's own sequences at this size.</b>` : ''}</p>
         <div class="fields" style="margin-top:12px">
           <label>Start channel <input type="number" id="mStart" min="1" value="${m.startChannel}"></label>
           <label>Width (pixels) <input type="number" id="mW" min="1" value="${m.width}"></label>
