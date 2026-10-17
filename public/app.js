@@ -371,6 +371,7 @@
       ['Late >20 ms (song)', w.total ? `${w.total.over20} of ${w.total.frames}` : '0'], ['Block decode', `${w.maxDecodeMs ?? 0} ms`],
       ['Output send', w.outputs && w.outputs.sender ? `${w.outputs.sender.maxSendMs.toFixed(1)} ms${w.outputs.pacingMbps ? ` @ ${w.outputs.pacingMbps} Mbit/s` : ' (unpaced)'}` : '—'],
       ['Output frames dropped', w.outputs ? w.outputs.droppedFrames : 0],
+      ...(w.net ? [['Matrix DDP in', w.net.active ? `${w.net.fps} fps · ${w.net.incomplete} skipped` : 'waiting']] : []),
       ['Audio out', p.audioOut || '—'], ['Display', p.display], ['Screen', STATUS.screen ? (STATUS.screen.asleep ? 'off (sleeping)' : STATUS.screen.enabled ? 'on' : 'on (no sleep)') : '—'], ['MultiSync', STATUS.multisync.sending ? 'sending' : STATUS.mode === 'remote' ? `following ${STATUS.multisync.lastMaster || '—'}` : 'off'],
     ].map(([k, v]) => `<div class="stat"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('');
   }
@@ -1382,6 +1383,11 @@
       <div class="card"><h3>Virtual matrix</h3>
         <label class="inline"><input type="checkbox" id="mOn" ${m.enabled ? 'checked' : ''}> Show a channel range as a matrix on HDMI</label>
         <div class="fields" style="margin-top:12px">
+          <label>Picture comes from <select id="mSrc"><option value="sequence" ${m.source !== 'network' ? 'selected' : ''}>This player's sequences (uploaded with FPP Connect)</option><option value="network" ${m.source === 'network' ? 'selected' : ''}>DDP from the network (main player or xLights)</option></select></label>
+          <label id="mOffWrap" ${m.source === 'network' ? '' : 'hidden'}>DDP channel numbers <select id="mOff">${[['auto', 'Detect automatically'], ['raw', 'Show channel numbers (ShowPilot Player / FPP output)'], ['relative', 'Start at 0 (xLights DDP controller)']].map(([v, l]) => `<option value="${v}" ${v === (m.ddpOffset || 'auto') ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        </div>
+        <p class="dim" id="mNetHelp" ${m.source === 'network' ? '' : 'hidden'}>On the main player add a DDP controller output to this player's address covering the matrix channels (start ${m.startChannel}, ${(m.width * m.height * 3).toLocaleString()} channels); in xLights, a DDP controller pointing here works too. Frames with a missing piece are skipped (the last one stays up) so the picture never tears. Wired network recommended (about ${Math.round(m.width * m.height * 3 * 40 * 8 / 1e6)} Mbit/s at 40 fps).</p>
+        <div class="fields" style="margin-top:12px">
           <label>Start channel <input type="number" id="mStart" min="1" value="${m.startChannel}"></label>
           <label>Width (pixels) <input type="number" id="mW" min="1" value="${m.width}"></label>
           <label>Height (pixels) <input type="number" id="mH" min="1" value="${m.height}"></label>
@@ -1409,6 +1415,7 @@
         <label class="inline" style="margin-top:12px"><input type="checkbox" id="ssShows" ${ss.keepAwakeDuringShows !== false ? 'checked' : ''}> Keep it on through scheduled shows, and wake it 2 minutes before one starts</label>
         <p class="dim">A sleeping monitor takes a few seconds to wake. During scheduled shows it stays on, so the first song isn't missed; a song started by hand wakes it right away.</p>
         <div class="row"><button class="btn primary" id="saveSS">Save</button><span class="spacer"></span><button class="btn" id="ssSleep"><i class="fas fa-moon"></i> Turn off now</button><button class="btn" id="ssWake"><i class="fas fa-sun"></i> Turn on now</button></div></div>`;
+    $('#mSrc').onchange = () => { const net = $('#mSrc').value === 'network'; $('#mOffWrap').hidden = !net; $('#mNetHelp').hidden = !net; };
     const ssState = () => {
       const st = STATUS && STATUS.screen;
       const box = $('#ssState');
@@ -1435,7 +1442,8 @@
     $('#saveDisp').onclick = guard(() => saveConfig({
       video: { enabled: $('#vidOn').checked, idleAddress: $('#vidAddr').checked },
       matrix: { enabled: $('#mOn').checked, startChannel: +$('#mStart').value, width: +$('#mW').value, height: +$('#mH').value, colorOrder: $('#mOrder').value,
-        startCorner: $('#mCorner').value, orientation: $('#mOrient').value, serpentine: $('#mSerp').checked, preferVideo: $('#mPrefer').checked },
+        startCorner: $('#mCorner').value, orientation: $('#mOrient').value, serpentine: $('#mSerp').checked, preferVideo: $('#mPrefer').checked,
+        source: $('#mSrc').value, ddpOffset: $('#mOff').value },
     }));
   };
 
